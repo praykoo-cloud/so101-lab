@@ -54,6 +54,9 @@ def main():
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
+    except Exception:
+        if rclpy.ok():
+            raise          # Ctrl+C 로 끝나는 중에 타이머가 한 번 더 발행하다 나는 오류는 숨긴다
     finally:
         node.cap.release()
         node.destroy_node()

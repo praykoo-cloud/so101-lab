@@ -47,13 +47,22 @@ class TaskNode(Node):
     def say(self, text):
         self.get_logger().info(text)
 
+    def call(self, client, req):
+        """서비스 응답을 기다린다. client.call() 은 끝없이 기다려서, Ctrl+C 로 arm_node 가 먼저 꺼지면 이 노드가 내려가지 않았다"""
+        fut = client.call_async(req)
+        while rclpy.ok() and not fut.done():
+            time.sleep(0.05)
+        if not fut.done():
+            raise KeyboardInterrupt
+        return fut.result()
+
     def pose(self, name, speed):
-        res = self.go.call(GoPose.Request(name=name, speed=speed))
+        res = self.call(self.go, GoPose.Request(name=name, speed=speed))
         if not res.success:
             raise RuntimeError(res.message)
 
     def gripper(self, pct):
-        res = self.grip.call(SetGripper.Request(percent=pct))
+        res = self.call(self.grip, SetGripper.Request(percent=pct))
         if not res.success:
             raise RuntimeError(res.message)
         return res.load
@@ -61,9 +70,9 @@ class TaskNode(Node):
     def run(self):
         """상태 기계. 서비스 응답(call)을 기다리므로 spin 과 다른 스레드에서 돈다"""
         for c in (self.go, self.grip, self.torque):
-            while not c.wait_for_service(timeout_sec=2.0):
+            while rclpy.ok() and not c.wait_for_service(timeout_sec=2.0):
                 self.say(f"기다리는 중: {c.srv_name} (arm_node 가 떠 있나?)")
-        self.torque.call(SetBool.Request(data=True))    # 잠그기 (arm_node 는 목표 = 지금 위치로 맞춘 뒤 켠다)
+        self.call(self.torque, SetBool.Request(data=True))    # 잠그기 (arm_node 는 목표 = 지금 위치로 맞춘 뒤 켠다)
         self.pose("home", self.fast)
         state, done = "WAIT", {"red": 0, "blue": 0}
         self.say("WAIT: 검사 자리에 물체를 놓으세요")
