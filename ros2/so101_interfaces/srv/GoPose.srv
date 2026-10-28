@@ -1,0 +1,6 @@
+# 저장한 자세로 이동 (data/poses.json). 도착할 때까지 기다린 뒤 응답한다
+string name          # home, above_pick, pick ...
+int32 speed          # 서보 속도 (틱/초). 0 이면 기본값
+---
+bool success
+string message

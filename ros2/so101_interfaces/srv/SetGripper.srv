@@ -1,0 +1,6 @@
+# 그리퍼 열기 정도. 물체에 막히면 그 자리에서 멈춘 뒤 응답한다
+float32 percent      # 0 닫힘 ~ 100 열림
+---
+bool success
+string message
+int32 load           # 그리퍼 서보 부하 (물체를 쥐면 커진다)

@@ -1,0 +1,5 @@
+# 지금 자세를 이름 붙여 저장 (티칭)
+string name
+---
+bool success
+string message

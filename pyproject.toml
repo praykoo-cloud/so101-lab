@@ -1,0 +1,6 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# 패키지 정보는 setup.cfg 에 있다. Ubuntu 22.04 (ROS2 Humble) 의 setuptools 59 는
+# pyproject.toml 의 [project] 를 읽지 못하고 -e 설치도 setup.py 가 있어야 된다.

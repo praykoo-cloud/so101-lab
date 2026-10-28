@@ -1,0 +1,24 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+.pytest_cache/
+
+# 팔마다 다른 파일 · 실습 중에 생기는 파일
+data/calibration.json
+data/poses.json
+data/recordings/*.json
+!data/recordings/.gitkeep
+data/*.bak.json
+*.png
+*.jpg
+!docs/**/*.png
+
+# 카메라 설정 · 사진 (자리마다 다름)
+project/color.json
+
+
+# 컨테이너 안 colcon 작업 폴더
+.ws/

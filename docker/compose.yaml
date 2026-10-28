@@ -1,0 +1,18 @@
+# docker compose -f docker/compose.yaml run --rm so101            ← 컨테이너 안 bash
+# docker compose -f docker/compose.yaml run --rm so101 ros2 launch so101_ros sort.launch.py
+services:
+  so101:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: so101-lab:humble
+    network_mode: host          # PC 의 RViz · 다른 노드와 같은 네트워크 (ROS_DOMAIN_ID 만 맞추면 보인다)
+    ipc: host
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+    privileged: true            # 팔 · 카메라는 /dev 통째로 (이름을 적으면 팔을 안 꽂은 Pi 에서 안 뜬다)
+    volumes:
+      - ..:/root/so101-lab      # 레포 그대로 (자세 · 카메라 설정이 Pi 에 남는다)
+      - /dev:/dev
+    stdin_open: true
+    tty: true
