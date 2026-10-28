@@ -115,7 +115,7 @@ bot.move("elbow", 30)              # 관절 하나 (base · shoulder · elbow ·
 bot.move_all({"base": 10, "elbow": 60})
 bot.gripper(60)                    # 0 닫힘 ~ 100 열림
 bot.wait_until_settled()           # 마지막 목표에 도착할 때까지
-bot.save_pose("home"); bot.go_pose("home")
+bot.save_pose("home"); bot.go_pose("home")   # 그리퍼는 그대로 둔다 (gripper=True 면 저장한 값까지)
 frames = bot.record(5, name="take1"); bot.play("take1")
 bot.stop()                         # 그 자리에서 멈춤
 ```

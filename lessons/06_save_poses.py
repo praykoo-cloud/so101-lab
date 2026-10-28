@@ -6,7 +6,7 @@
 할 일
   1. 토크가 풀리면 안내에 나오는 자세를 손으로 잡고 Enter
      home(접힌 자세) · above_pick(물체 위 5cm) · pick(물체를 감싸는 높이) · above_place · place
-  2. 그리퍼도 그 자세에 맞게 손으로 벌려 둔다 (pick 은 벌린 채, 07 에서 닫는다)
+  2. 그리퍼 값도 같이 저장되지만 go_pose 는 그리퍼를 움직이지 않는다. 열고 닫기는 07 에서 gripper() 로
   3. 다 하면 data/poses.json 이 생긴다. 다시 잡고 싶은 자세만 NAMES 에 남기고 다시 실행해도 된다
 """
 import os

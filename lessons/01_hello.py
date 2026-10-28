@@ -15,6 +15,7 @@ PORT = os.environ.get("SOARM_PORT", "COM4")     # 리눅스 · 라즈베리파�
 
 bot = Robot(PORT)
 print("연결:", bot)
+print("실물 연결:", bot.real)          # False 면 가상 팔 (SOARM_PORT=fake)
 
 for sid, s in bot.status().items():
     print(f"  {sid}. {s['name']:<12} {s['angle_deg']:7.1f}°   전압 {s['voltage']:.1f}V   "

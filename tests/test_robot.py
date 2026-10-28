@@ -114,6 +114,19 @@ def test_save_and_go_pose_roundtrip_in_controller_format(bus):
     assert abs(present(bus, 1) - FOLDED[1]) <= 3
 
 
+def test_go_pose_keeps_a_closed_gripper(bus):
+    # 집은 뒤 above_pick 으로 올라갈 때 그리퍼가 저장된 열린 값으로 돌아가면 물체를 놓친다
+    bot = Robot("FAKE", speed=0)
+    bot.torque(True)
+    bot.gripper(60); bot.wait_until_settled(timeout=2)
+    bot.save_pose("above_pick")
+    bot.gripper(5); bot.wait_until_settled(timeout=2)
+    bot.go_pose("above_pick", timeout=2)
+    assert bot.gripper_percent() < 10
+    bot.go_pose("above_pick", timeout=2, gripper=True)
+    assert bot.gripper_percent() > 55
+
+
 def test_go_pose_unknown_name(bus):
     bot = Robot("FAKE")
     bot.torque(True)
@@ -141,3 +154,9 @@ def test_torque_off_stays_off(bus):
     bot.save_pose("p")
     bot.angles()
     assert all(bus.servos[s].mem[TORQUE] == 0 for s in FOLDED)
+
+
+def test_real_flag_tells_virtual_arm_apart(bus):
+    bot = Robot("fake")
+    assert bot.real is False and "가상 팔" in repr(bot)
+    assert Robot("COM4", connect=False).real is True

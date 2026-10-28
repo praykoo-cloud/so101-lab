@@ -96,6 +96,7 @@ class Robot:
                 raise RobotError(f"포트를 정해 주세요: Robot('COM4') 처럼. 보이는 포트: {ports or '없음'}")
             port = ports[0]
         self.port = port
+        self.real = str(port).lower() != "fake"   # False = 가상 팔
         self.speed = int(speed)
         self.accel = int(accel)
         self.driver = STS3215Driver(port=port)
@@ -141,7 +142,7 @@ class Robot:
         self.close()
 
     def __repr__(self) -> str:
-        return f"Robot({self.port!r})"
+        return f"Robot({self.port!r}, {'실물' if self.real else '가상 팔'})"
 
     # ── 읽기 ─────────────────────────────────────────────────────────────
     def positions(self) -> dict[int, Optional[int]]:
@@ -330,12 +331,20 @@ class Robot:
         _save_json(POSES_FILE, all_poses)
         return entry
 
-    def go_pose(self, name: str, speed: Optional[int] = None, wait: bool = True, timeout: float = 10.0) -> None:
-        """저장한 자세로. 기본은 도착할 때까지 기다린다"""
+    def go_pose(self, name: str, speed: Optional[int] = None, wait: bool = True, timeout: float = 10.0,
+                gripper: bool = False) -> None:
+        """저장한 자세로. 기본은 도착할 때까지 기다린다.
+
+        그리퍼는 기본으로 그대로 둔다 (gripper=False). 자세에 저장된 그리퍼 값까지 되돌리면
+        pick 에서 닫은 그리퍼가 above_pick 으로 올라가며 다시 열려 물체를 놓친다.
+        그리퍼까지 저장한 대로 하려면 gripper=True. 열고 닫기는 gripper() 로 따로 한다
+        """
         entry = _load_json(POSES_FILE, {}).get(name)
         if entry is None:
             raise RobotError(f"자세 '{name}' 이 없습니다. 있는 것: {sorted(_load_json(POSES_FILE, {}))}")
         raw = _decode(entry.get("positions"), entry.get("format") == POSE_FORMAT)
+        if not gripper:
+            raw.pop(6, None)
         self._move_positions(raw, speed)
         if wait:
             self.wait_until_settled(timeout=timeout)
