@@ -39,6 +39,7 @@ python lessons/01_hello.py
 
 캘리브레이션 파일은 팔마다 다르다. PC 에서 쓰던 팔이면 `data/calibration.json` 을 Pi 로 복사한다 (`scp`).
 화면이 없으므로 카메라 확인은 `python project/p1_camera.py --roi 270 190 100 100 --snapshot` → `project/snapshot.jpg` 를 PC 로 가져와 본다.
+카메라는 일반 USB 웹캠(UVC)을 쓴다. 깊이 카메라처럼 전용 드라이버가 있는 카메라는 OpenCV 로 열면 깨진 화면이 나오거나 열리지 않는다.
 
 ## 4. Docker 로 ROS2 Humble
 
@@ -68,18 +69,20 @@ ros2 launch so101_ros sort.launch.py port:=/dev/ttyACM0 camera:=/dev/video0   # 
 
 - 컨테이너는 Pi 의 `~/so101-lab` 을 그대로 쓴다. 자세(`data/poses.json`) · 카메라 설정(`project/color.json`)이 Pi 에 남는다
 - 컨테이너는 Pi 의 `/dev` 를 통째로 본다. 팔 · 카메라 이름이 `/dev/ttyACM0` · `/dev/video0` 가 아니면 launch 의 `port:=` · `camera:=` 만 바꾼다
+- 끝낼 때는 Ctrl+C. 뒤에서 띄운 컨테이너(`run -d`)는 `docker stop <이름>` 으로 끄면 Ctrl+C 와 같이 2 ~ 3초 안에 내려간다
 
 ## 5. PC 에서 보기 (RViz)
 
-PC 의 WSL Ubuntu 22.04 + Humble 에서:
+PC 의 WSL Ubuntu 22.04 + Humble 에서. PC 에도 레포를 받아 `colcon build` 해 둔다 (RViz 가 팔 메시를 `package://so101_ros/meshes/` 에서 찾는다):
 
 ```bash
 export ROS_DOMAIN_ID=<팀 번호>          # Pi 와 같은 번호. Pi 쪽은 compose 실행 전에 같은 값으로 export
 ros2 topic list                          # /joint_states · /color/detected 가 보여야 한다
-rviz2                                    # Fixed Frame: base_link, RobotModel → Topic /robot_description
+rviz2 -d ~/so101-lab/ros2/so101_ros/rviz/so101.rviz     # Fixed Frame base_link, RobotModel 이 미리 들어 있다
 ```
 
 같은 공유기에 있어야 하고, WSL 은 미러 네트워크(`networkingMode=mirrored`)여야 한다. 공유기가 멀티캐스트를 막으면 노드가 안 보인다 → 멀티캐스트가 되는 공유기를 따로 쓴다.
+다른 공유기(다른 Wi-Fi)에 있으면 Pi 로 ping 은 가도 노드는 보이지 않고 `ros2 service call` 이 멈춘다.
 
 ## 6. HiWonder 차와 같은 도메인에서
 
@@ -95,4 +98,10 @@ ros2 launch so101_ros arm.launch.py port:=/dev/ttyACM0 namespace:=so101
 
 ## 문제가 생기면
 
-컨테이너에서 처음 `ros2 node list` 같은 명령이 오래 멈추거나 `TimeoutError: [Errno 110]` 로 끝나면 `ros2 daemon start` 를 먼저 한 번 한다.
+| 증상 | 할 일 |
+|---|---|
+| 처음 `ros2 node list` 가 오래 멈추거나 `TimeoutError: [Errno 110]` | `ros2 daemon start` 를 먼저 한 번 |
+| `ros2 node list` 가 `!rclpy.ok()` 오류 | 망을 바꾸기 전에 뜬 데몬이 남았다 → `ros2 daemon stop` 후 `ros2 daemon start` |
+| PC 에서 Pi 의 노드가 안 보인다 | 같은 공유기인지, `ROS_DOMAIN_ID` 가 같은지, WSL 이 미러 네트워크인지 |
+| RViz 에 팔 모양이 안 나온다 | PC 에서도 `colcon build` 를 했는지 (`package://so101_ros`) |
+| Pi 에서 `git clone` 이 `could not read Username` | 레포가 비공개다 → 공개 레포를 쓰거나 GitHub 토큰으로 받는다 |
