@@ -85,6 +85,8 @@ python scripts/from_lerobot.py follower  # LeRobot 캘리브레이션 파일 →
 | p3_teach | 자세 7개 티칭: home · above_pick · pick · above_red · red · above_blue · blue |
 | p4_sort | 분류: WAIT → PICK → PLACE → CLEAR 상태 기계 |
 
+카메라 · 색 종이가 없으면 `python scripts/make_test_video.py` 로 시험 영상(`data/color_test.mp4`, 빨강 · 파랑이 한 번씩)을 만들어 카메라 자리에 준다.
+
 ## ROS2 (ros2/) · 라즈베리파이 (docker/)
 
 `so101_interfaces` (서비스 GoPose · SavePose · SetGripper) 와 `so101_ros` (노드 4개). 노드는 `soarm` 을 그대로 쓴다.
@@ -138,7 +140,7 @@ so101-lab/
 ├─ lessons/          실습 01~08
 ├─ theory/           이론 실습 t1~t5 (기구학 · 제어)
 ├─ project/          색 분류 프로젝트 1~4
-├─ scripts/          find_port · check_motors · from_lerobot · calibrate
+├─ scripts/          find_port · check_motors · from_lerobot · calibrate · make_test_video
 ├─ ros2/             so101_interfaces · so101_ros
 ├─ docker/           라즈베리파이용 ROS2 Humble 컨테이너
 ├─ docs/             raspberry_pi.md

@@ -12,6 +12,7 @@ data/poses.json
 data/recordings/*.json
 !data/recordings/.gitkeep
 data/*.bak.json
+data/color_test.mp4
 *.png
 *.jpg
 !docs/**/*.png
