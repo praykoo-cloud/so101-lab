@@ -9,6 +9,7 @@ HiWonder 차처럼 /joint_states · /robot_description · base_link 를 쓰는 �
 → /so101/joint_states · /so101/robot_description, TF 프레임 so101/base_link ... (서비스 /arm/* 는 그대로)
 
 URDF 는 so101-lab/model/so101.urdf 를 쓴다 (soarm 패키지 위치로 찾는다).
+메시는 package://so101_ros/meshes/ 로 보낸다 → 노트북 RViz 도 자기 쪽에 빌드한 so101_ros 에서 찾는다.
 """
 import os
 
@@ -25,8 +26,8 @@ from soarm.robot import ROOT
 def robot_description():
     model = ROOT / "model"
     urdf = (model / "so101.urdf").read_text(encoding="utf-8")
-    # 메시 경로 assets/... → 절대 경로 (RViz 가 찾을 수 있게)
-    return urdf.replace('filename="assets/', f'filename="file://{model}/assets/')
+    # 메시 경로 assets/... → package:// (절대 경로로 보내면 다른 기계의 RViz 가 찾지 못한다)
+    return urdf.replace('filename="assets/', 'filename="package://so101_ros/meshes/')
 
 
 def nodes(context):
