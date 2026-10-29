@@ -14,5 +14,6 @@ services:
     volumes:
       - ..:/root/so101-lab      # 레포 그대로 (자세 · 카메라 설정이 Pi 에 남는다)
       - /dev:/dev
+    stop_signal: SIGINT         # docker stop 도 Ctrl+C 처럼 (SIGTERM 이면 10초 기다렸다 강제로 끈다)
     stdin_open: true
     tty: true
