@@ -107,7 +107,7 @@ ros2 launch so101_ros sort.launch.py port:=/dev/ttyACM0 camera:=/dev/video0
 
 ## 보충: HiWonder 차와 같이 (car/)
 
-차(MentorPi, 메카넘)의 Pi 5 에 팔을 꽂고 같은 ROS_DOMAIN_ID 로. 예제는 ROS2 표준 메시지만 쓴다: [docs/car.md](docs/car.md).
+차(MentorPi, 메카넘)의 Pi 5 에 팔을 꽂고 같은 ROS_DOMAIN_ID 로. 팔을 자기 Pi 로 옮겨도 그대로 돈다. 예제는 ROS2 표준 메시지만 쓴다: [docs/car.md](docs/car.md).
 
 | 파일 | 내용 | 차 |
 |---|---|---|
@@ -115,6 +115,7 @@ ros2 launch so101_ros sort.launch.py port:=/dev/ttyACM0 camera:=/dev/video0
 | c2_drive | 앞뒤 · 옆 · 회전, 명령 vs 오도메트리 vs IMU | 움직임 |
 | c3_lidar_stop | 앞 장애물 30 cm 에서 멈추기 (`--dry`) | 움직임 |
 | c4_car_and_arm | 다가가기 → 그리퍼 → 돌아오기 (`--dry`) | 움직임 |
+| link_check | 다른 Pi 의 팔: 서비스 왕복 · joint_states 속도 · 시계 차 | 안 움직임 |
 
 ## Robot 한눈에
 
@@ -153,7 +154,7 @@ so101-lab/
 ├─ project/          색 분류 프로젝트 1~4
 ├─ scripts/          find_port · check_motors · from_lerobot · calibrate · make_test_video
 ├─ ros2/             so101_interfaces · so101_ros
-├─ car/              HiWonder 차 예제 c1~c4 (carlib.py)
+├─ car/              HiWonder 차 예제 c1~c4 (carlib.py) · link_check
 ├─ docker/           라즈베리파이용 ROS2 Humble 컨테이너
 ├─ docs/             raspberry_pi.md · car.md
 ├─ model/            so101.urdf · kinematics.json · assets/*.stl
