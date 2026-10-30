@@ -1,11 +1,11 @@
 """차 3 — 라이다로 앞을 보고 멈추기.
 
     python3 car/c3_lidar_stop.py --dry       # 움직이지 않고 판단만 찍는다
-    python3 car/c3_lidar_stop.py             # 앞 장애물이 30 cm 가 될 때까지 천천히 앞으로 (최대 1 m)
+    python3 car/c3_lidar_stop.py             # 앞 장애물이 30 cm 가 될 때까지 천천히 앞으로 (최대 10 cm)
 
 규칙 세 개: 앞(±15°) 가장 가까운 거리가 stop 보다 가까우면 멈춘다. 앞에 잡힌 점이 하나도 없으면 멈춘다
 (라이다는 책상 끝 같은 낭떠러지를 못 본다). 라이다 값이 0.5 초 넘게 안 오면 멈춘다.
-해 볼 것: 상자를 차 앞 80 cm 에 놓고 실행 → 30 cm 앞에서 서는지. --stop 0.5 로 바꿔 본다.
+해 볼 것: 상자를 차 앞 35 cm 에 놓고 실행 → 5 cm 가서 30 cm 앞에서 서는지. --stop 0.2 로 바꿔 본다.
 """
 import argparse
 import sys
@@ -17,8 +17,8 @@ from carlib import Car  # noqa: E402
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--stop", type=float, default=0.30, help="이 거리(m)보다 가까우면 멈춘다")
-ap.add_argument("--speed", type=float, default=0.05)
-ap.add_argument("--max", type=float, default=1.0, help="최대 이동 거리 (m)")
+ap.add_argument("--speed", type=float, default=0.03)
+ap.add_argument("--max", type=float, default=0.10, help="최대 이동 거리 (m). 책상 위라 작게")
 ap.add_argument("--dry", action="store_true", help="움직이지 않고 판단만")
 args = ap.parse_args()
 

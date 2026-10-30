@@ -45,8 +45,8 @@ compose 는 `FASTDDS_BUILTIN_TRANSPORTS=UDPv4` 를 넘긴다. 같은 Pi 에서 �
 | 파일 | 하는 일 | 차 |
 |---|---|---|
 | c1_sensors | 배터리 · IMU yaw · 오도메트리 · 라이다 앞/왼/오/뒤 | 안 움직임 |
-| c2_drive | 앞뒤 · 옆 10 cm, 45° 회전. 명령 vs 오도메트리 vs IMU | 움직임 |
-| c3_lidar_stop | 앞 30 cm 까지 천천히 (`--dry` 는 판단만) | 움직임 |
+| c2_drive | 앞뒤 · 옆 3 cm, 15° 회전. 명령 vs 오도메트리 vs IMU | 움직임 |
+| c3_lidar_stop | 앞 30 cm 까지 천천히, 최대 10 cm (`--dry` 는 판단만) | 움직임 |
 | c4_car_and_arm | 다가가기 → 그리퍼 열고 닫기 → 돌아오기 (`--dry` 는 팔만) | 움직임 |
 
 - 차는 마지막 명령을 계속 따른다. `carlib.Car` 는 Ctrl+C · `docker stop` · `timeout` 에도 0 을 보내고 끝난다

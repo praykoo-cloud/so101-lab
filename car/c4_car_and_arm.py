@@ -24,8 +24,8 @@ from std_srvs.srv import SetBool  # noqa: E402
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--stop", type=float, default=0.30)
-ap.add_argument("--speed", type=float, default=0.05)
-ap.add_argument("--max", type=float, default=0.30, help="최대 전진 거리 (m)")
+ap.add_argument("--speed", type=float, default=0.03)
+ap.add_argument("--max", type=float, default=0.10, help="최대 전진 거리 (m). 책상 위라 작게")
 ap.add_argument("--dry", action="store_true", help="차는 움직이지 않는다")
 args = ap.parse_args()
 

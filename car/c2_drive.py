@@ -1,9 +1,9 @@
 """차 2 — 정해진 만큼 움직이기 (cmd_vel).
 
-    python3 car/c2_drive.py            # 앞 10 cm → 뒤 10 cm → 왼쪽 옆 10 cm → 오른쪽 옆 10 cm → 왼쪽 45° → 오른쪽 45°
-    python3 car/c2_drive.py --speed 0.03
+    python3 car/c2_drive.py            # 앞 3 cm → 뒤 → 왼쪽 옆 3 cm → 오른쪽 옆 → 왼쪽 15° → 오른쪽 15°
+    python3 car/c2_drive.py --dist 0.05 --turn 30
 
-차를 바닥에 놓고 사방 50 cm 를 비운다. 메카넘 바퀴라 옆으로도 간다 (vy).
+차는 책상 위에 둔다. 가장자리에서 30 cm 넘게 떨어뜨리고, 거리는 몇 cm 씩만. 메카넘 바퀴라 옆으로도 간다 (vy).
 명령한 거리 · 각도와, 오도메트리 · IMU 가 잰 값을 나란히 찍는다.
 오도메트리는 명령한 속도를 더한 값이라 미끄러져도 모른다. IMU 회전은 실제로 잰 값이다.
 """
@@ -16,9 +16,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from carlib import Car  # noqa: E402
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--speed", type=float, default=0.05, help="m/s (0.2 까지)")
-ap.add_argument("--dist", type=float, default=0.10, help="m")
-ap.add_argument("--turn", type=float, default=45, help="도")
+ap.add_argument("--speed", type=float, default=0.03, help="m/s (0.2 까지)")
+ap.add_argument("--dist", type=float, default=0.03, help="m")
+ap.add_argument("--turn", type=float, default=15, help="도")
 args = ap.parse_args()
 
 car = Car("c2_drive")
