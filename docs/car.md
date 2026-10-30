@@ -103,6 +103,8 @@ c4 는 팔 서비스를 차가 선 뒤에만, 시간 제한(찾기 5초 · 응�
 ros2 run so101_ros color_node --ros-args -r /camera/image_raw:=/ascamera/camera_publisher/rgb0/image
 ```
 
+차 카메라는 `bgr8` 로 보낸다 (`ros2 topic echo --once /ascamera/camera_publisher/rgb0/image --field encoding`). color_node 는 `bgr8` 을 그대로, `rgb8` 은 순서를 바꿔 읽는다. 차 카메라는 p1 (OpenCV) 로 열리지 않으므로 ROI 는 `/color/debug_image/compressed` 를 보며 `project/color.json` 을 직접 고친다.
+
 ## 안 될 때
 
 | 증상 | 확인 |
