@@ -167,7 +167,7 @@ def main() -> None:
     arm = STS3215Driver(port=args.port)
     print(f"\n{args.port} 여는 중 ...")
     if not arm.connect():
-        print("  ✗ 열 수 없습니다. 다른 프로그램(LeRobot · 컨트롤러 앱)이 포트를 쓰고 있나요?")
+        print("  ✗ 열 수 없습니다. 다른 프로그램(LeRobot · ArmStudio)이 포트를 쓰고 있나요?")
         sys.exit(1)
     print("  ✓ 연결됨")
 

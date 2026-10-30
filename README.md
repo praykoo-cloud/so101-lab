@@ -1,9 +1,9 @@
 # so101-lab
 
-SO-ARM101 을 **컨트롤러 앱 없이** Python 으로 바로 움직이는 실습 레포. 티칭(손으로 자세를 잡고 저장 → 재생) 중심.
+SO-ARM101 을 **앱 없이** Python 으로 바로 움직이는 실습 레포. 티칭(손으로 자세를 잡고 저장 → 재생) 중심.
 
 - 팔을 꽂은 PC(Windows · Ubuntu)나 라즈베리파이 5 에서 같은 코드가 돈다. 필요한 것은 Python 3.10 이상과 `pyserial` 뿐
-- `soarm.Robot` 은 so-arm101-controller-app 의 `sdk/soarm.py` 와 함수 이름이 같다. 그쪽은 컨트롤러 서버에 HTTP 로, 이쪽은 시리얼 포트로 바로 보낸다
+- `soarm.Robot` 은 ArmStudio 앱의 SDK 와 하는 일이 같고 이름이 일부 다르다 (`get_joints` → `angles`, `move_joint` → `move`). 그쪽은 앱에 HTTP 로, 이쪽은 시리얼 포트로 바로 보낸다
 - 자세 · 녹화 파일(`data/poses.json`, `data/recordings/*.json`)은 컨트롤러 앱과 같은 형식이다
 
 ## 설치

@@ -1,8 +1,8 @@
 """SO-ARM101 를 USB 로 바로 움직이는 학생용 Robot.
 
-so-arm101-controller-app 의 sdk/soarm.py 와 함수 이름 · 뜻이 같다. 다른 점은 하나:
-그쪽은 컨트롤러 서버에 HTTP 로 보내고, 이쪽은 driver_sdk.py 로 시리얼 포트를 직접 연다.
-그래서 컨트롤러 앱 없이, 팔을 꽂은 PC · 라즈베리파이에서 바로 돈다.
+ArmStudio 앱의 SDK 와 하는 일은 같고 이름이 일부 다르다 (get_joints → angles, move_joint → move).
+그쪽은 앱에 HTTP 로 보내고, 이쪽은 driver_sdk.py 로 시리얼 포트를 직접 연다.
+그래서 앱 없이, 팔을 꽂은 PC · 라즈베리파이에서 바로 돈다.
 
     from soarm import Robot
 
@@ -116,7 +116,7 @@ class Robot:
     # ── 연결 ─────────────────────────────────────────────────────────────
     def connect(self) -> "Robot":
         if not self.driver.connect():
-            raise RobotError(f"{self.port} 을 열 수 없습니다. 포트 이름, 다른 프로그램(LeRobot · 컨트롤러 앱)이 "
+            raise RobotError(f"{self.port} 을 열 수 없습니다. 포트 이름, 다른 프로그램(LeRobot · ArmStudio)이 "
                              f"쓰고 있지 않은지 확인하세요")
         missing = [sid for sid in JOINT_IDS if not self.driver.ping(sid)]
         if missing:

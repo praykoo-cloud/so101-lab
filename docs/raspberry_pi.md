@@ -104,4 +104,4 @@ ros2 launch so101_ros arm.launch.py port:=/dev/ttyACM0 namespace:=so101
 | `ros2 node list` 가 `!rclpy.ok()` 오류 | 망을 바꾸기 전에 뜬 데몬이 남았다 → `ros2 daemon stop` 후 `ros2 daemon start` |
 | PC 에서 Pi 의 노드가 안 보인다 | 같은 공유기인지, `ROS_DOMAIN_ID` 가 같은지, WSL 이 미러 네트워크인지 |
 | RViz 에 팔 모양이 안 나온다 | PC 에서도 `colcon build` 를 했는지 (`package://so101_ros`) |
-| Pi 에서 `git clone` 이 `could not read Username` | 레포가 비공개다 → 공개 레포를 쓰거나 GitHub 토큰으로 받는다 |
+| Pi 에서 `git clone` 이 `could not read Username` | 레포가 비공개다 → 공개 레포를 쓰거나 GitHub 토큰으로 받는다. 토큰이 없으면 PC 에서 `git bundle create so101.bundle main` → `scp` → Pi 에서 `git clone -b main so101.bundle ~/so101-lab` (`-b main` 이 없으면 빈 폴더) |

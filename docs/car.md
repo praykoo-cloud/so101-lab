@@ -113,7 +113,7 @@ ros2 run so101_ros color_node --ros-args -r /camera/image_raw:=/ascamera/camera_
 | 팔: `모터 [1..6] 이 응답하지 않습니다` | 팔 12 V 어댑터. USB 만으로는 포트만 보인다 |
 | 팔 포트가 차 보드로 열린다 | `/dev/serial/by-id/` 이름으로 |
 | `/arm/go_pose ... 토크가 꺼진 관절` | `/arm/torque true` 먼저 (c4 는 한다) |
-| WSL 에서 `ros2 node list` 가 멈춘다 | `ros2 daemon stop` 뒤 다시 |
+| WSL 에서 `ros2 node list` 가 멈춘다 | `ros2 daemon stop` → `ros2 daemon start` |
 | 다른 Pi 의 노드가 안 보인다 | 같은 공유기 · 대역인지, `ros2 multicast receive / send`, 양쪽 `ROS_DOMAIN_ID` |
 | `자세 'home' 이 없습니다` | 자세 파일이 팔 Pi 에 없다 → 팔 Pi 에서 티칭 또는 `scp data/poses.json` |
 | `/arm/... 응답 없음` | 팔 Pi 가 꺼졌거나 Wi-Fi. c4 는 20초 뒤 멈춘다 |
