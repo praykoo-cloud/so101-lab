@@ -38,6 +38,8 @@ docker compose -f docker/compose.yaml run --rm --name so101car so101 \
 
 예제는 다른 창에서 `docker exec -it so101car bash` 로 들어가 실행한다.
 
+compose 는 `FASTDDS_BUILTIN_TRANSPORTS=UDPv4` 를 넘긴다. 같은 Pi 에서 차 노드는 ubuntu 사용자, 이 컨테이너는 root 라 FastDDS 의 공유 메모리로는 서로 데이터를 받지 못한다 (노드 목록에도 안 나온다).
+
 ## 예제 (car/)
 
 | 파일 | 하는 일 | 차 |
@@ -64,6 +66,7 @@ ros2 run so101_ros color_node --ros-args -r /camera/image_raw:=/ascamera/camera_
 |---|---|
 | 바퀴가 안 돈다, `/dev/rrc` 가 없다 | `lsusb \| grep 55d4`. STM 보드 USB 선 (데이터용) |
 | `차 토픽이 안 들어온다` | 차에서 controller.launch.py, 양쪽 `ROS_DOMAIN_ID` |
+| 노드 목록에 차가 없다 (차는 `docker_shell.sh` 로 띄움) | 차는 ubuntu, so101-lab 컨테이너는 root → FastDDS 공유 메모리가 서로 안 열린다. compose 가 `FASTDDS_BUILTIN_TRANSPORTS=UDPv4` 를 넘긴다. 다른 셸에서는 직접 export |
 | 팔: `모터 [1..6] 이 응답하지 않습니다` | 팔 12 V 어댑터. USB 만으로는 포트만 보인다 |
 | 팔 포트가 차 보드로 열린다 | `/dev/serial/by-id/` 이름으로 |
 | `/arm/go_pose ... 토크가 꺼진 관절` | `/arm/torque true` 먼저 (c4 는 한다) |

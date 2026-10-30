@@ -10,6 +10,7 @@ services:
     ipc: host
     environment:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - FASTDDS_BUILTIN_TRANSPORTS=UDPv4   # 공유 메모리 대신 UDP: 같은 Pi 의 다른 사용자(HiWonder 차의 ubuntu) 노드와도 통한다
     privileged: true            # 팔 · 카메라는 /dev 통째로 (이름을 적으면 팔을 안 꽂은 Pi 에서 안 뜬다)
     volumes:
       - ..:/root/so101-lab      # 레포 그대로 (자세 · 카메라 설정이 Pi 에 남는다)
