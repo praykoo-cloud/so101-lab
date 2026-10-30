@@ -32,6 +32,8 @@ class ColorNode(Node):
 
     def on_image(self, msg: Image):
         frame = np.frombuffer(msg.data, np.uint8).reshape(msg.height, msg.width, 3)
+        if msg.encoding == "rgb8":          # camera_node · HiWonder 차 카메라는 bgr8. RGB 로 보내는 카메라면 순서를 바꾼다
+            frame = np.ascontiguousarray(frame[:, :, ::-1])
         color, ratios = classify(frame, self.cfg)
         self.pub.publish(String(data=color))
         if color != self.last:
