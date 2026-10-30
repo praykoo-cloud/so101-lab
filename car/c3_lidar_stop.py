@@ -3,7 +3,8 @@
     python3 car/c3_lidar_stop.py --dry       # 움직이지 않고 판단만 찍는다
     python3 car/c3_lidar_stop.py             # 앞 장애물이 30 cm 가 될 때까지 천천히 앞으로 (최대 1 m)
 
-규칙 두 개: 앞(±15°) 가장 가까운 거리가 stop 보다 가까우면 멈춘다. 라이다 값이 0.5 초 넘게 안 오면 멈춘다.
+규칙 세 개: 앞(±15°) 가장 가까운 거리가 stop 보다 가까우면 멈춘다. 앞에 잡힌 점이 하나도 없으면 멈춘다
+(라이다는 책상 끝 같은 낭떠러지를 못 본다). 라이다 값이 0.5 초 넘게 안 오면 멈춘다.
 해 볼 것: 상자를 차 앞 80 cm 에 놓고 실행 → 30 cm 앞에서 서는지. --stop 0.5 로 바꿔 본다.
 """
 import argparse
@@ -37,13 +38,19 @@ try:
         if time.time() - last_stamp > 0.5:
             reason = "라이다 값이 끊김"
             break
-        if d is not None and d < args.stop:
-            reason = f"앞 {d * 100:.0f} cm < {args.stop * 100:.0f} cm"
+        if d is None:                       # 앞에 잡힌 점이 없다: 비었는지, 낭떠러지(책상 끝)인지 모른다
+            blocked = "앞에 잡힌 점이 없다 (모르면 멈춤)"
+        elif d < args.stop:
+            blocked = f"앞 {d * 100:.0f} cm < {args.stop * 100:.0f} cm"
+        else:
+            blocked = None
+        if blocked:
+            reason = blocked
             if not args.dry:
                 break
         if moved >= args.max:
             break
-        print(f"앞 {'-' if d is None else f'{d * 100:.0f}'} cm  → {'멈춤' if d is not None and d < args.stop else '전진'}"
+        print(f"앞 {'-' if d is None else f'{d * 100:.0f}'} cm  → {'멈춤' if blocked else '전진'}"
               f"{' (dry)' if args.dry else ''}   간 거리 {moved * 100:.0f} cm", flush=True)
         if not args.dry:
             car.send(vx=args.speed)

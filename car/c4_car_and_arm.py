@@ -75,7 +75,7 @@ try:
         def arrived():
             d = car.front()
             moved = ((car.x - x0) ** 2 + (car.y - y0) ** 2) ** 0.5
-            return (d is not None and d < args.stop) or moved >= args.max
+            return d is None or d < args.stop or moved >= args.max      # 앞이 안 보이면(None) 멈춤
         car.drive(vx=args.speed, sec=args.max / args.speed + 1, until=arrived)
         car.spin(0.5)
     moved = ((car.x - x0) ** 2 + (car.y - y0) ** 2) ** 0.5
