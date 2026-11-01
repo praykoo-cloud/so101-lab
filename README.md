@@ -58,6 +58,7 @@ python scripts/from_lerobot.py follower  # LeRobot 캘리브레이션 파일 →
 | 06_save_poses | 티칭 3: 자세를 이름으로 저장 (home · above_pick · pick · above_place · place) | 손으로 |
 | 07_pick_place | 티칭 4: 저장한 자세로 픽 앤 플레이스 | 움직임 |
 | 08_record_play | 티칭 5: 손으로 움직인 동작 녹화 → 재생 | 손으로 → 움직임 |
+| 09_my_motion | 나만의 동작: 동작을 함수로 만들고 이어 붙이기 (가상 팔: `python lessons/09_my_motion.py fake`) | 코드 → 움직임 |
 
 팔이 없으면 `PORT` 대신 `fake` 를 쓴다 (`soarm/fake.py`, 가상 서보 버스). 같은 코드가 돈다.
 
