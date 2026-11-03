@@ -1,7 +1,8 @@
 """모터 6개 점검 (읽기만 함 — 토크 · 위치를 바꾸지 않는다).
 
-    python scripts/check_motors.py COM4
+    python scripts/check_motors.py COM4            (리눅스 · 라즈베리파이: /dev/ttyACM0)
 
+포트를 빼면 SOARM_PORT, 그다음 보드가 하나만 꽂혀 있으면 그 포트를 쓴다.
 전압으로 팔을 구분할 수 있다: 팔로워 약 12V, 리더 약 5V.
 """
 import sys
@@ -9,11 +10,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from soarm.driver_sdk import JOINT_IDS, JOINT_LIMITS, JOINT_NAMES, STS3215Driver  # noqa: E402
+from soarm.robot import default_port, find_ports  # noqa: E402
 
-port = sys.argv[1] if len(sys.argv) > 1 else "/dev/ttyACM0"
+port = sys.argv[1] if len(sys.argv) > 1 else default_port()
+if port is None:
+    sys.exit(f"포트를 정해 주세요: python scripts/check_motors.py COM4 처럼. 보이는 포트: {find_ports() or '없음'}")
 arm = STS3215Driver(port=port)
 if not arm.connect():
-    sys.exit(f"{port} 을 열 수 없습니다 (포트 이름 · 다른 프로그램이 쓰는지 확인)")
+    sys.exit(f"{port} 을 열 수 없습니다. 포트 이름, 다른 프로그램(ArmStudio 는 [연결 해제] · LeRobot)이 쓰고 있지 않은지 확인하세요")
 try:
     print(f"{port}")
     print(f"  {'ID':<3}{'관절':<13}{'응답':<5}{'위치':>6}{'각도':>8}{'범위':>13}{'토크':>5}{'전압':>7}{'온도':>5}")

@@ -26,7 +26,9 @@ cycles, so each physical arm keeps its own centring even when you swap
 calibration files between robots.
 
 Usage:
-    python3 scripts/calibrate.py --port /dev/ttyACM0 --label team1
+    python scripts/calibrate.py --port COM4 --label team1          (Windows)
+    python3 scripts/calibrate.py --port /dev/ttyACM0 --label team1 (Linux · Raspberry Pi)
+    --port 를 빼면 SOARM_PORT, 그다음 보드가 하나만 꽂혀 있으면 그 포트
 """
 from __future__ import annotations
 
@@ -46,6 +48,7 @@ from soarm.driver_sdk import (
     STS3215Driver, JOINT_IDS, JOINT_NAMES, JOINT_LIMITS,
     POS_CENTER, POS_MAX, POS_RANGE,
 )
+from soarm.robot import default_port, find_ports
 
 
 CALIBRATION_FILE = ROOT / "data" / "calibration.json"
@@ -159,10 +162,14 @@ def detect_gripper_flip(arm: STS3215Driver, lo: int, hi: int) -> bool:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[1])
-    parser.add_argument("--port",  default="/dev/ttyACM0")
+    parser.add_argument("--port",  default=None, help="COM4 · /dev/ttyACM0 (빼면 SOARM_PORT 또는 꽂힌 보드 하나)")
     parser.add_argument("--label", default="", help="robot name (informational)")
     parser.add_argument("--out",   default=str(CALIBRATION_FILE))
     args = parser.parse_args()
+    if args.port is None:
+        args.port = default_port()
+    if args.port is None:
+        sys.exit(f"포트를 정해 주세요: --port COM4 처럼. 보이는 포트: {find_ports() or '없음'}")
 
     arm = STS3215Driver(port=args.port)
     print(f"\n{args.port} 여는 중 ...")

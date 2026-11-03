@@ -83,18 +83,24 @@ def find_ports() -> list[str]:
     return sorted(out)
 
 
+def default_port() -> Optional[str]:
+    """포트를 안 적었을 때: 환경변수 SOARM_PORT → 보드가 하나만 보이면 그 포트. 정할 수 없으면 None"""
+    port = os.environ.get("SOARM_PORT")
+    if port:
+        return port
+    ports = find_ports()
+    return ports[0] if len(ports) == 1 else None
+
+
 class Robot:
     """SO-ARM101 한 대. 포트 하나 = 팔 하나 (팔로워든 리더든)."""
 
     def __init__(self, port: Optional[str] = None, *, speed: int = DEFAULT_SPEED,
                  accel: int = DEFAULT_ACCEL, connect: bool = True):
         if port is None:
-            port = os.environ.get("SOARM_PORT")
+            port = default_port()
         if port is None:
-            ports = find_ports()
-            if len(ports) != 1:
-                raise RobotError(f"포트를 정해 주세요: Robot('COM4') 처럼. 보이는 포트: {ports or '없음'}")
-            port = ports[0]
+            raise RobotError(f"포트를 정해 주세요: Robot('COM4') 처럼. 보이는 포트: {find_ports() or '없음'}")
         self.port = port
         self.real = str(port).lower() != "fake"   # False = 가상 팔
         self.speed = int(speed)
