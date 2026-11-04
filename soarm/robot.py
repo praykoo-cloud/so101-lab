@@ -83,6 +83,9 @@ def find_ports() -> list[str]:
     return sorted(out)
 
 
+EXAMPLE_PORT = "COM4" if os.name == "nt" else "/dev/ttyACM0"      # 안내 문구용 (Windows · 리눅스 · 라즈베리파이)
+
+
 def default_port() -> Optional[str]:
     """포트를 안 적었을 때: 환경변수 SOARM_PORT → 보드가 하나만 보이면 그 포트. 정할 수 없으면 None"""
     port = os.environ.get("SOARM_PORT")
@@ -100,7 +103,7 @@ class Robot:
         if port is None:
             port = default_port()
         if port is None:
-            raise RobotError(f"포트를 정해 주세요: Robot('COM4') 처럼. 보이는 포트: {find_ports() or '없음'}")
+            raise RobotError(f"포트를 정해 주세요: Robot('{EXAMPLE_PORT}') 처럼. 보이는 포트: {find_ports() or '없음'}")
         self.port = port
         self.real = str(port).lower() != "fake"   # False = 가상 팔
         self.speed = int(speed)

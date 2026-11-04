@@ -48,7 +48,7 @@ from soarm.driver_sdk import (
     STS3215Driver, JOINT_IDS, JOINT_NAMES, JOINT_LIMITS,
     POS_CENTER, POS_MAX, POS_RANGE,
 )
-from soarm.robot import default_port, find_ports
+from soarm.robot import EXAMPLE_PORT, default_port, find_ports
 
 
 CALIBRATION_FILE = ROOT / "data" / "calibration.json"
@@ -169,7 +169,7 @@ def main() -> None:
     if args.port is None:
         args.port = default_port()
     if args.port is None:
-        sys.exit(f"포트를 정해 주세요: --port COM4 처럼. 보이는 포트: {find_ports() or '없음'}")
+        sys.exit(f"포트를 정해 주세요: --port {EXAMPLE_PORT} 처럼. 보이는 포트: {find_ports() or '없음'}")
 
     arm = STS3215Driver(port=args.port)
     print(f"\n{args.port} 여는 중 ...")

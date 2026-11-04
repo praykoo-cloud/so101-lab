@@ -10,11 +10,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from soarm.driver_sdk import JOINT_IDS, JOINT_LIMITS, JOINT_NAMES, STS3215Driver  # noqa: E402
-from soarm.robot import default_port, find_ports  # noqa: E402
+from soarm.robot import EXAMPLE_PORT, default_port, find_ports  # noqa: E402
 
 port = sys.argv[1] if len(sys.argv) > 1 else default_port()
 if port is None:
-    sys.exit(f"포트를 정해 주세요: python scripts/check_motors.py COM4 처럼. 보이는 포트: {find_ports() or '없음'}")
+    sys.exit(f"포트를 정해 주세요: python scripts/check_motors.py {EXAMPLE_PORT} 처럼. 보이는 포트: {find_ports() or '없음'}")
 arm = STS3215Driver(port=port)
 if not arm.connect():
     sys.exit(f"{port} 을 열 수 없습니다. 포트 이름, 다른 프로그램(ArmStudio 는 [연결 해제] · LeRobot)이 쓰고 있지 않은지 확인하세요")
