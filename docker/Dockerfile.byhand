@@ -1,0 +1,35 @@
+# B 판 (하나하나): 빈 Ubuntu 22.04 에 ROS2 Humble 을 공식 설치 순서대로. docker/Dockerfile (ros:humble-ros-base 에서 시작)과 결과가 같다.
+#   docker build -f docker/Dockerfile.byhand -t so101-lab:byhand .
+# 줄마다 컨테이너 안에서 손으로 친 명령과 같다 (docs.ros.org Humble 'Ubuntu (deb packages)').
+FROM ubuntu:22.04
+
+# 손으로 칠 때 나오는 질문(시간대 등)을 건너뛴다
+ENV DEBIAN_FRONTEND=noninteractive TZ=Asia/Seoul
+
+# 1. 언어 설정
+RUN apt-get update && apt-get install -y locales \
+    && locale-gen en_US en_US.UTF-8 && update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
+ENV LANG=en_US.UTF-8
+
+# 2. ROS2 저장소 추가 (ros2-apt-source 패키지가 키와 주소를 넣는다)
+RUN apt-get install -y software-properties-common curl && add-apt-repository -y universe \
+    && ROS_APT_SOURCE_VERSION=$(curl -s https://api.github.com/repos/ros-infrastructure/ros-apt-source/releases/latest | grep -F tag_name | awk -F\" '{print $4}') \
+    && curl -sL -o /tmp/ros2-apt-source.deb "https://github.com/ros-infrastructure/ros-apt-source/releases/download/${ROS_APT_SOURCE_VERSION}/ros2-apt-source_${ROS_APT_SOURCE_VERSION}.$(. /etc/os-release && echo $VERSION_CODENAME)_all.deb" \
+    && apt-get install -y /tmp/ros2-apt-source.deb && rm /tmp/ros2-apt-source.deb
+
+# 3. ROS2 Humble (기본) + 빌드 도구 (colcon)
+RUN apt-get update && apt-get install -y ros-humble-ros-base ros-dev-tools
+
+# 4. 팔 · 카메라에 필요한 것 (docker/Dockerfile 과 같다)
+RUN apt-get install -y --no-install-recommends \
+        python3-pip python3-opencv python3-numpy python3-serial python3-pytest \
+        ros-humble-robot-state-publisher \
+    && rm -rf /var/lib/apt/lists/*
+
+# 5. 컨테이너가 뜰 때: soarm 설치 · ros2/ 빌드 (docker/Dockerfile 과 같다)
+WORKDIR /root/so101-lab
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh \
+    && echo 'source /opt/ros/humble/setup.bash; [ -f /root/so101-lab/.ws/install/setup.bash ] && source /root/so101-lab/.ws/install/setup.bash' >> /root/.bashrc
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["bash"]
