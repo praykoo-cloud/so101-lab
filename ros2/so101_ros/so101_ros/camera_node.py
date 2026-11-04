@@ -8,6 +8,7 @@ device 에 영상 파일 경로를 주면 끝까지 재생한 뒤 처음부터 �
 """
 import cv2
 import rclpy
+from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from sensor_msgs.msg import Image
@@ -18,7 +19,8 @@ from soarm.color import open_camera
 class CameraNode(Node):
     def __init__(self):
         super().__init__("camera_node")
-        dev = self.declare_parameter("device", "0").value
+        # device:=0 은 숫자, device:=/dev/video0 · 파일 경로는 글자 → 둘 다 받는다 (글자만 받으면 device:=0 이 InvalidParameterTypeException)
+        dev = self.declare_parameter("device", "0", ParameterDescriptor(dynamic_typing=True)).value
         self.width = int(self.declare_parameter("width", 640).value)
         self.height = int(self.declare_parameter("height", 480).value)
         fps = float(self.declare_parameter("fps", 10.0).value)
