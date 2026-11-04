@@ -213,6 +213,25 @@ class TableMap:
         return cls(d["H"], d["z"], d.get("pixels"), d.get("points"))
 
 
+# ── c9 가 만든 카메라 ↔ 로봇 식 (hand_eye.json) ──────────────────────
+HAND_EYE_FILE = HERE / "hand_eye.json"
+
+
+def load_hand_eye(path: Path = HAND_EYE_FILE) -> dict:
+    if not path.exists():
+        sys.exit(f"{path.name} 이 없습니다. 먼저 python camera/c9_hand_eye.py (--teach · --ruler 도 됨)")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def hand_eye_xy(model: dict, u: float, v: float) -> list:
+    """픽셀 → 로봇 (x, y) m. line(세로축) 은 1차원 원근식 x = (a s + b) / (c s + 1), plane 은 3×3 호모그래피"""
+    if model["mode"] == "line":
+        s = (np.array([u, v]) - model["mean"]) @ np.array(model["dir"])
+        a, b, c = model["abc"]
+        return [float((a * s + b) / (c * s + 1)), model.get("y", 0.0)]
+    return list(TableMap(model["H"], model["z"]).to_xy(u, v))
+
+
 # ── 팔: 손끝 좌표 · 좌표로 움직이기 ─────────────────────────────────
 def urdf_deg(bot) -> list[float]:
     """지금 관절 5개(받침 ~ 손목 회전)를 URDF 기준 도로 → soarm.kinematics.fk 에 그대로 넣는다"""
