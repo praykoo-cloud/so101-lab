@@ -17,6 +17,7 @@ import json
 import math
 import os
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -53,10 +54,45 @@ def save_settings(cfg: dict) -> Path:
     return SETTINGS_FILE
 
 
+class LoopFile:
+    """영상 파일을 카메라처럼: 제 속도(fps)로 읽고, 끝나면 처음부터 다시.
+    카메라가 없을 때 camera.json 의 "camera" 에 "data/color_test.mp4" 처럼 파일 경로를 넣는다
+    (영상 만들기: python scripts/make_test_video.py)"""
+
+    def __init__(self, path: str):
+        self.cap = cv2.VideoCapture(path)
+        fps = self.cap.get(cv2.CAP_PROP_FPS)
+        self.dt = 1.0 / (fps if fps > 0 else 10.0)
+        self.next = time.time()
+
+    def isOpened(self):
+        return self.cap.isOpened()
+
+    def read(self):
+        time.sleep(max(0.0, self.next - time.time()))
+        self.next = max(self.next + self.dt, time.time())
+        ok, frame = self.cap.read()
+        if not ok:
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            ok, frame = self.cap.read()
+        return ok, frame
+
+    def get(self, prop):
+        return self.cap.get(prop)
+
+    def release(self):
+        self.cap.release()
+
+
 def open_cam(cfg: dict):
-    """camera.json 의 번호로 연다. 못 열면 c1 을 하라는 말과 함께 끝낸다"""
+    """camera.json 의 번호(또는 영상 파일)로 연다. 못 열면 c1 을 하라는 말과 함께 끝낸다"""
     index = cfg["camera"]
     hint = f"카메라 {index} 를 열 수 없습니다. python camera/c1_find_camera.py 로 번호를 확인하세요 (다른 프로그램이 쓰는 중이어도 안 열림)"
+    if isinstance(index, str) and Path(index).is_file():
+        cam = LoopFile(index)
+        if not cam.isOpened():
+            sys.exit(f"영상 파일 {index} 을 열 수 없습니다")
+        return cam
     if sys.platform.startswith("linux") and isinstance(index, int) and not Path(f"/dev/video{index}").exists():
         sys.exit(hint)                                   # 리눅스 · Pi: 없는 번호를 열면 OpenCV 경고가 길게 나온다
     try:
