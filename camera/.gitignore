@@ -1,0 +1,4 @@
+# PC · 카메라 자리마다 다른 것 (c1 · c5 가 만든다)
+out/
+camera.json
+table_map.json
