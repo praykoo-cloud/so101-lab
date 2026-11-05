@@ -6,10 +6,12 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
     image: so101-lab:humble
+    entrypoint: ["bash", "/root/so101-lab/docker/entrypoint.sh"]   # 레포의 것을 직접 (고쳐도 다시 빌드할 필요 없음)
     network_mode: host          # PC 의 RViz · 다른 노드와 같은 네트워크 (ROS_DOMAIN_ID 만 맞추면 보인다)
     ipc: host
     environment:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - HOST_USER=${USER:-user}           # 컨테이너 안 사용자 이름 = Pi 사용자 (번호는 레포 폴더 주인과 같게)
       - FASTDDS_BUILTIN_TRANSPORTS=UDPv4   # 공유 메모리 대신 UDP: 같은 Pi 의 다른 사용자(HiWonder 차의 ubuntu) 노드와도 통한다
     privileged: true            # 팔 · 카메라는 /dev 통째로 (이름을 적으면 팔을 안 꽂은 Pi 에서 안 뜬다)
     volumes:
