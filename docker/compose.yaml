@@ -7,6 +7,7 @@ services:
       dockerfile: docker/Dockerfile
     image: so101-lab:humble
     entrypoint: ["bash", "/root/so101-lab/docker/entrypoint.sh"]   # 레포의 것을 직접 (고쳐도 다시 빌드할 필요 없음)
+    command: ["bash"]          # entrypoint 를 바꾸면 이미지의 기본 명령이 지워지므로 다시 적는다
     network_mode: host          # PC 의 RViz · 다른 노드와 같은 네트워크 (ROS_DOMAIN_ID 만 맞추면 보인다)
     ipc: host
     environment:

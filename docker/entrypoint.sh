@@ -4,6 +4,7 @@
 # → 컨테이너 안에서 만든 파일도 Pi 사용자 것 (root 소유 파일 때문에 Pi 에서 못 고치는 일이 없다)
 # compose.yaml 이 이 파일을 레포에서 직접 부른다 → 고쳐도 이미지를 다시 빌드할 필요 없음
 set -e
+[ "$#" -gt 0 ] || set -- bash                        # 명령 없이 run 하면 bash (compose 가 entrypoint 를 바꾸면 이미지의 CMD 가 지워진다)
 source /opt/ros/humble/setup.bash
 cd /root/so101-lab
 # 레포 밖(/)에서 검사한다. 레포 안에서는 현재 폴더 때문에 import 가 되어 설치를 건너뛰게 된다
