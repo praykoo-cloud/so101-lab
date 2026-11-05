@@ -27,6 +27,8 @@ setup(
             "camera_node = so101_ros.camera_node:main",
             "color_node = so101_ros.color_node:main",
             "task_node = so101_ros.task_node:main",
+            "ball_node = so101_ros.ball_node:main",
+            "follow_node = so101_ros.follow_node:main",
         ],
     },
 )

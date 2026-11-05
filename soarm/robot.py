@@ -240,6 +240,21 @@ class Robot:
         raw = {_resolve_joint(k): deg_to_pos(v) for k, v in angles_deg.items() if v is not None}
         self._move_positions(raw, speed)
 
+    def move_radians(self, rad: dict, speed: Optional[int] = None) -> None:
+        """URDF 관절 각도(rad, /joint_states 와 같은 기준)로. {"shoulder_pan": 0.1} 또는 {1: 0.1}.
+        joint_radians() 의 거꾸로 — ROS2 의 /arm/joint_command 가 쓴다. 적지 않은 관절은 그대로"""
+        raw = {}
+        for joint, r in rad.items():
+            sid = _resolve_joint(joint)
+            lim = JOINT_LIMITS.get(sid) or {}
+            r = -r if lim.get("invert") else r
+            if "rad_min" in lim and "rad_max" in lim and "min" in lim and "max" in lim:
+                t = (r - lim["rad_min"]) / ((lim["rad_max"] - lim["rad_min"]) or 1)
+                raw[sid] = position_from_fraction(t, lim)
+            else:
+                raw[sid] = int(round(POS_CENTER + r / (2 * 3.141592653589793) * 4095))
+        self._move_positions(raw, speed)
+
     def gripper(self, percent: float, speed: Optional[int] = None) -> None:
         """그리퍼 0(닫힘) ~ 100(열림)"""
         lim = JOINT_LIMITS.get(6)

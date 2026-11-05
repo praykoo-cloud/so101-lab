@@ -8,6 +8,8 @@
        /arm/save_pose     so101_interfaces/SavePose 지금 자세 저장 (티칭)
        /arm/gripper       so101_interfaces/SetGripper
        /arm/stop          std_srvs/Trigger         그 자리에서 멈춤
+구독   /arm/joint_command sensor_msgs/JointState   관절 목표 (rad, /joint_states 와 같은 기준). 적은 관절만 움직인다
+                          한 번에 max_step(rad) 넘게 움직이라고 하면 max_step 까지만. 토크가 꺼져 있으면 무시
 """
 import rclpy
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
@@ -28,6 +30,8 @@ class ArmNode(Node):
         port = self.declare_parameter("port", "/dev/ttyACM0").value
         speed = int(self.declare_parameter("speed", 200).value)
         rate = float(self.declare_parameter("rate", 20.0).value)
+        self.max_step = float(self.declare_parameter("max_step", 0.15).value)      # rad ≈ 8.6°
+        self.cmd_speed = int(self.declare_parameter("cmd_speed", 150).value)
         self.bot = Robot(port, speed=speed)
         self.get_logger().info(f"연결: {port}")
 
@@ -41,6 +45,8 @@ class ArmNode(Node):
         self.create_service(SavePose, "/arm/save_pose", self.on_save_pose, callback_group=srv_group)
         self.create_service(SetGripper, "/arm/gripper", self.on_gripper, callback_group=srv_group)
         self.create_service(Trigger, "/arm/stop", self.on_stop, callback_group=srv_group)
+        self.create_subscription(JointState, "/arm/joint_command", self.on_command, 10, callback_group=srv_group)
+        self.warned = False
 
     def publish_state(self):
         rad = self.bot.joint_radians()
@@ -51,6 +57,28 @@ class ArmNode(Node):
         msg.name = NAMES
         msg.position = [float(rad[i]) for i in range(1, 7)]
         self.pub.publish(msg)
+
+    def on_command(self, msg: JointState):
+        now = self.bot.joint_radians()
+        target = {}
+        for name, pos in zip(msg.name, msg.position):
+            if name not in NAMES:
+                self.get_logger().warn(f"모르는 관절 이름: {name}")
+                continue
+            sid = NAMES.index(name) + 1
+            cur = now.get(sid)
+            if cur is not None:
+                pos = max(cur - self.max_step, min(cur + self.max_step, pos))     # 한 번에 크게 튀지 않게
+            target[name] = pos
+        if not target:
+            return
+        try:
+            self.bot.move_radians(target, speed=self.cmd_speed)
+            self.warned = False
+        except RobotError as e:
+            if not self.warned:                                               # 같은 경고를 계속 찍지 않게
+                self.get_logger().warn(f"joint_command 무시: {e}  → ros2 service call /arm/torque std_srvs/srv/SetBool \"{{data: true}}\"")
+                self.warned = True
 
     def on_torque(self, req, res):
         self.bot.torque(req.data)
