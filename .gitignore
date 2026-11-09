@@ -23,3 +23,7 @@ project/color.json
 
 # 컨테이너 안 colcon 작업 폴더
 .ws/
+
+# 로봇팔 미션: 실행 중 생기는 파일 (작업 기록 · 기준색 · 로그). 팀 설정(mission/config.json)은 올려도 된다
+mission/runtime/
+mission/frames/
