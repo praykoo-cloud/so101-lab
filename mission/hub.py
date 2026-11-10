@@ -5,6 +5,8 @@
     .venv/bin/python -m mission.hub                       # 허브 첫 화면
     .venv/bin/python -m mission.hub --start settings      # 바로 설정 값 화면
 VS Code 의 Ports 에서 8081 을 전달하고 노트북 브라우저로 http://127.0.0.1:8081 을 연다.
+    .venv/bin/python -m mission.hub --lan                 # 포트 전달 없이 노트북에서 http://<Pi 의 IP>:8081 로 바로 열기
+    (--lan 은 같은 와이파이의 누구나 이 화면을 열어 팔을 움직일 수 있다. 준비할 때만 쓰고, 다 쓰면 허브를 끈다)
 
 모두 **실물**만 쓴다 (가짜 영상 · 가상 팔 없음).
 - 카메라는 처음 필요한 화면에서 열고, 영상이 안 들어오면 이유와 함께 알려 준다.
@@ -16,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import html
+import ipaddress
 import json
 import os
 import re
@@ -191,6 +194,7 @@ class Hub:
         self.teach_cls = None
         self.quit = False
         self.practice = None                   # 15번 집기 연습 (실행 중이면 팔 · 카메라를 혼자 쓴다)
+        self.allow_lan = False                 # --lan: 같은 네트워크의 다른 기기에서 Pi 의 IP 로 열 수 있게
         self.allow_fake = False                # --fake-arm: 화면 연습용 가짜 팔 허용 (16번 동작 티칭)
         self.motion_desk = None                # 16번 동작 티칭 (재생 중이면 팔을 혼자 쓴다)
         self.detector = None                   # 17번 YOLO (처음 열 때 모델을 읽는다)
@@ -902,7 +906,16 @@ def make_router(hub: Hub):
             self.end_headers()
 
         def local_host(self):
-            return self.headers.get("Host", "").partition(":")[0] in ("127.0.0.1", "localhost")
+            host = self.headers.get("Host", "").partition(":")[0]
+            if host in ("127.0.0.1", "localhost"):
+                return True
+            if not hub.allow_lan:
+                return False
+            try:                                         # --lan: 숫자 IP 주소로 연 것만 받는다 (도메인 이름은 거절)
+                ipaddress.IPv4Address(host)
+                return True
+            except ValueError:
+                return False
 
         def html(self, body):
             self.send(200, "text/html; charset=utf-8", body)
@@ -1061,9 +1074,20 @@ def make_router(hub: Hub):
     return Router
 
 
+def lan_ip() -> str:
+    """이 기기가 와이파이에서 쓰는 IP 주소 (실제로 아무것도 보내지 않고 알아낸다)"""
+    import socket
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("192.0.2.1", 9))
+            return s.getsockname()[0]
+    except OSError:
+        return "<이 기기의 IP>"
+
+
 def make_server(hub: Hub, web_port: int = 8081) -> ThreadingHTTPServer:
     """요청을 여러 개 동시에 받는 서버. 브라우저가 열어 둔 빈 연결 · 예전 탭이 서버를 막지 못한다"""
-    server = ThreadingHTTPServer(("127.0.0.1", web_port), make_router(hub))
+    server = ThreadingHTTPServer(("0.0.0.0" if hub.allow_lan else "127.0.0.1", web_port), make_router(hub))
     server.daemon_threads = True
     return server
 
@@ -1072,11 +1096,14 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="배달 한방 허브 (브라우저)")
     parser.add_argument("--port", help="실물 팔 포트 (예: /dev/ttyACM1). 안 적으면 설정 값 · 자동 찾기")
     parser.add_argument("--web-port", type=int, default=8081)
+    parser.add_argument("--lan", action="store_true",
+                        help="포트 전달 없이 같은 와이파이의 노트북에서 http://<Pi 의 IP>:8081 로 열기 (누구나 열 수 있으니 준비할 때만)")
     parser.add_argument("--fake-arm", action="store_true", help="화면 연습용 가짜 팔 (16번 동작 티칭 화면을 팔 없이 눌러 볼 때)")
     parser.add_argument("--start", choices=sorted(MODE_NAMES | PAGE_NAMES), help="바로 열 화면 (안내 문구에 주소를 붙인다)")
     args = parser.parse_args(argv)
     hub = Hub("fake" if args.fake_arm else args.port)
     hub.allow_fake = args.fake_arm
+    hub.allow_lan = args.lan
     try:
         server = make_server(hub, args.web_port)
     except OSError as error:
@@ -1088,6 +1115,9 @@ def main(argv=None) -> int:
         start = f"go/{args.start}" if args.start in MODE_NAMES else f"p/{args.start}"
     url = f"http://127.0.0.1:{server.server_port}/{start}"
     print(f"배달 한방 허브: {url}", flush=True)
+    if hub.allow_lan:
+        print(f"같은 와이파이의 노트북에서: http://{lan_ip()}:{server.server_port}/{start}", flush=True)
+        print("주의: 같은 와이파이의 누구나 이 화면을 열어 팔을 움직일 수 있어요. 다 쓰면 허브를 끄세요.", flush=True)
     if os.name == "nt" and not os.environ.get("SSH_CONNECTION"):      # 이 PC 에서 실행하면 브라우저를 바로 연다
         import webbrowser
         webbrowser.open(url)

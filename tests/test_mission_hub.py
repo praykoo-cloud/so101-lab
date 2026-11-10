@@ -191,6 +191,21 @@ class HubTest(unittest.TestCase):
         status, _ = self.post("/api/settings", {"settings": {}}, token=False)
         self.assertEqual(status, 403)
 
+    def test_lan_mode_accepts_ip_host_only(self):
+        ip = urllib.request.Request(self.base + "/hub", headers={"Host": "192.168.0.23:8081"})
+        with self.assertRaises(urllib.error.HTTPError) as ctx:          # 기본: Pi 의 IP 로는 못 연다
+            urllib.request.urlopen(ip, timeout=5)
+        self.assertEqual(ctx.exception.code, 403)
+        self.hub.allow_lan = True
+        try:
+            self.assertEqual(urllib.request.urlopen(ip, timeout=5).status, 200)
+            name = urllib.request.Request(self.base + "/hub", headers={"Host": "evil.example.com"})
+            with self.assertRaises(urllib.error.HTTPError) as ctx:      # --lan 이어도 도메인 이름은 거절
+                urllib.request.urlopen(name, timeout=5)
+            self.assertEqual(ctx.exception.code, 403)
+        finally:
+            self.hub.allow_lan = False
+
     def test_non_local_host_forbidden(self):
         req = urllib.request.Request(self.base + "/hub", headers={"Host": "evil.example.com"})
         with self.assertRaises(urllib.error.HTTPError) as cm:
