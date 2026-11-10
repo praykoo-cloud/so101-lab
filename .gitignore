@@ -9,6 +9,7 @@ build/
 # 팔마다 다른 파일 · 실습 중에 생기는 파일
 data/calibration.json
 data/poses.json
+data/motions.json
 data/recordings/*.json
 !data/recordings/.gitkeep
 data/*.bak.json

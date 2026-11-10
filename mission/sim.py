@@ -12,7 +12,7 @@ from .config import MissionConfig
 from .link import FakeLink
 from .m3_pick_place import PickReport
 from .mission_main import Mission
-from .vision import ColorVote
+from .vision import Car, CarSeen, ColorVote
 
 # 시나리오: 시도마다 {"pick": ok|miss, "place": ok|drop|hide|stuck}
 SCENARIOS = {
@@ -50,6 +50,8 @@ class SimWorld:
         self.recovery_since: float | None = None
         self.arrival_calls = 0
         self.left_calls = 0
+        self.car_script: list = []              # 추적 시험용: 프레임마다 차 위치 (cx, cy) 또는 None
+        self.car_i = 0
 
 
 class SimArm:
@@ -58,6 +60,9 @@ class SimArm:
         self.pose = "rest"
         self.grip_value = 100.0
         self.torque = False
+        self.pan = 0.0                          # 받침(1번 관절) 각도
+        self.nudges: list[float] = []           # 추적 중 돌린 각도 기록
+        self.history: list[str] = []            # 간 자세 순서
 
     def preflight(self, needed):
         return []
@@ -74,8 +79,19 @@ class SimArm:
     def close(self):
         pass
 
+    def pan_angle(self):
+        return self.pan
+
+    def nudge_pan(self, delta_deg, center_deg, limit_deg):
+        self.pan = max(center_deg - limit_deg, min(center_deg + limit_deg, self.pan + delta_deg))
+        self.nudges.append(delta_deg)
+        return self.pan
+
     def go(self, pose, speed=None, wait=True, timeout=12.0):
         self.pose = pose
+        self.history.append(pose)
+        if pose in ("watch", "wait"):
+            self.pan = 0.0
         self.clock.sleep(1.0)
         if pose == "recovery_wait" and self.world.recovery_since is None:
             self.world.recovery_since = self.clock.now()
@@ -148,6 +164,23 @@ class SimMotion:
 class SimVision:
     def __init__(self, world: SimWorld, arm: SimArm, clock: SimClock, link: FakeLink):
         self.w, self.arm, self.clock, self.link = world, arm, clock, link
+
+    def has_baseline(self):
+        return True
+
+    def car_step(self, pan_offset=0.0):
+        """시험용 차 위치 대본을 한 프레임씩 읽는다 (끝나면 마지막 값을 계속)"""
+        self.w.pan_offsets = getattr(self.w, "pan_offsets", [])
+        self.w.pan_offsets.append(pan_offset)
+        w = self.w
+        if not w.car_script:
+            return CarSeen(None, 640, 480)
+        pos = w.car_script[min(w.car_i, len(w.car_script) - 1)]
+        w.car_i += 1
+        if pos is None:
+            return CarSeen(None, 640, 480)
+        cx, cy = pos
+        return CarSeen(Car((int(cx) - 40, int(cy) - 25, 80, 50), (float(cx), float(cy)), 4000), 640, 480)
 
     def reset_arrival(self):
         self.w.arrival_calls = 0

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import time
 from pathlib import Path
@@ -36,7 +37,7 @@ from .errors import SafetyAbort
 from .store import JobStore, StoreError
 
 LOW_TO_ABOVE = {"red": "above_red", "blue": "above_blue", "basket": "above_basket"}
-SAFE_POSES = ["wait", "retreat_mid", "above_basket", "above_red", "above_blue", "recovery_wait"]
+SAFE_POSES = ["wait", "watch", "retreat_mid", "above_basket", "above_red", "above_blue", "recovery_wait"]
 
 
 class Mission:
@@ -78,6 +79,11 @@ class Mission:
                 probs.append(f"구역 '{name}' 이 티칭되지 않았습니다 (m0_teach_rois.py)")
         if self.cfg.grip_ball_max_pct <= 0:
             probs.append("공을 쥔 그리퍼 % 가 티칭되지 않았습니다 (m0_teach_poses.py 의 ballgrip)")
+        if self.cfg.tracking_enabled:                           # 추적을 켰다면 그 준비도 되어 있어야 한다
+            if not self.cfg.roi_taught("track_road"):
+                probs.append("추적 모드인데 '추적할 도로 구역(track_road)' 이 티칭되지 않았습니다 (허브 4번)")
+            if not self.vision.has_baseline():
+                probs.append("추적 모드인데 '빈 도로 기준 사진' 이 없습니다 (허브 4번에서 추적 시작 자세로 찍기)")
         return probs
 
     def boot(self):
@@ -93,8 +99,8 @@ class Mission:
         status = self.rec["status"]
         self.log("boot", status=status, job_id=self.rec["job_id"], attempts=self.rec["physical_attempts"])
         self.publish(job_id=self.rec["job_id"], step="boot", status="")
-        if status == "idle":                    # 콜드 부팅 경로
-            if not self.arm.go("wait"):
+        if status == "idle":                    # 콜드 부팅 경로 (추적 모드면 추적 시작 자세, 아니면 포스트잇 대기 자세)
+            if not self.arm.go("watch" if self.cfg.tracking_enabled else "wait"):
                 raise SafetyAbort("대기 자세로 가지 못했습니다")
             self.publish(job_id=0, step="idle", result=None, done=False, clear=False)
         elif status in ("in_progress", "motion_unknown"):
@@ -104,7 +110,7 @@ class Mission:
 
     def motion_poses(self) -> list[str]:
         from .m3_pick_place import NEEDED_POSES
-        return NEEDED_POSES
+        return NEEDED_POSES + (["watch"] if self.cfg.tracking_enabled else [])
 
     def _safe_pose_or_abort(self) -> str:
         """재시작 직후: 지금 자세가 티칭 자세 근처여야만 복구 이동을 한다 (아니면 안 움직임)"""
@@ -153,21 +159,99 @@ class Mission:
                 raise SafetyAbort(f"예상하지 못한 작업 상태: {self.rec.get('status')}")
             self.rec = self.store.load()
 
-    def wait_for_car_and_start(self):
-        """카메라로 자동차(포스트잇)가 멈춰 선 것을 확인 → 색 판정 → 새 작업 기록"""
+    def _check_timeout(self, t0):
+        if self.max_wait is not None and self.clock() - t0 > self.max_wait:
+            raise TimeoutError("자동차가 오지 않았습니다 (시험용 시간 제한)")
+
+    def confirm_arrival(self, t0, timeout=None):
+        """wait 자세에서 포스트잇이 정차 구역에 멈춰 선 것을 확인 → 색 판정. timeout 안에 못 하면 None"""
         self.vision.reset_arrival()
-        t0 = self.clock()
+        started = self.clock()
         while True:
             if self.arm.too_hot():
                 raise SafetyAbort("모터 과열")
             if self.vision.arrival_step():
                 vote = self.vision.read_color()
                 if vote is not None:
-                    break                                       # 색까지 읽었을 때만 시작
+                    return vote                                 # 색까지 읽었을 때만 시작
                 self.vision.reset_arrival()
-            if self.max_wait is not None and self.clock() - t0 > self.max_wait:
-                raise TimeoutError("자동차가 오지 않았습니다 (시험용 시간 제한)")
+            self._check_timeout(t0)
+            if timeout is not None and self.clock() - started > timeout:
+                return None
             self.sleep(0.05)
+
+    def track_until_stopped(self, t0, need_motion=False):
+        """추적 모드: watch 자세에서 차를 찾아 받침(1번 관절)만 돌려 따라가고, 차가 멈추면 wait 자세로 이동한다.
+        need_motion=True 면 '일단 차가 움직이는 것'을 본 뒤에야 정차로 인정한다 (같은 자리에 선 차를 또 쫓지 않게)"""
+        cfg = self.cfg
+        if not self.arm.go("watch"):
+            raise SafetyAbort("추적 시작 자세로 가지 못했습니다")
+        center = self.arm.pan_angle()
+        if center is None:
+            raise SafetyAbort("받침(1번 관절) 각도를 읽지 못했습니다")
+        sign = 1 if cfg.track_pan_sign >= 0 else -1
+        last = None                                             # (cx, cy, pan) 지난 프레임
+        still_since = lost_since = None
+        # 받침을 + 로 돌렸을 때 차가 가운데로 오는지(1) 멀어지는지(-1)는 설정값이다.
+        # 움직이는 차를 보고 스스로 뒤집으면 오해할 수 있어서(팔이 못 따라간 동안 멀어져 보임) 자동으로 바꾸지 않는다.
+        # 정지한 물체로 측정하려면 허브 3번(추적 시작 자세)의 '추적 방향 확인'을 쓴다.
+        while True:
+            self._check_timeout(t0)
+            if self.arm.too_hot():
+                raise SafetyAbort("모터 과열")
+            pan_now = self.arm.pan_angle()
+            # 지금 받침 각도에 맞는 빈 도로 사진과 비교해야 한다 (받침이 돌면 배경이 밀리므로 한 장으로는 오인함)
+            seen = self.vision.car_step((pan_now - center) if pan_now is not None else 0.0)
+            now = self.clock()
+            car = seen.car if seen else None
+            if car is None:
+                still_since, last = None, None
+                lost_since = lost_since if lost_since is not None else now
+                if now - lost_since >= cfg.track_lost_seconds:
+                    need_motion = False                          # 차가 사라졌으니 다음에 보이는 차는 새 차
+                    if abs((self.arm.pan_angle() or center) - center) > 0.5:
+                        self.arm.go("watch")                     # 가운데(시작 자세)로 돌아간다
+                    lost_since = now
+                self.sleep(cfg.track_period)
+                continue
+            lost_since = None
+            cx, cy = car.centroid
+            pan = self.arm.pan_angle()
+            error = cx - seen.width / 2                          # +: 차가 화면 오른쪽
+            moved = last is not None and (math.hypot(cx - last[0], cy - last[1]) > cfg.track_stop_px
+                                          or abs((pan or 0) - last[2]) > 0.3)
+            if moved:
+                still_since = None
+                if need_motion and last is not None and math.hypot(cx - last[0], cy - last[1]) > 3 * cfg.track_stop_px:
+                    need_motion = False                          # 움직임을 봤다 → 다음 정차부터 인정
+            elif last is not None:
+                still_since = still_since if still_since is not None else now
+                if now - still_since >= cfg.track_stop_seconds and not need_motion:
+                    self.log("track_stopped", cx=round(cx), cy=round(cy), pan=pan)
+                    if not self.arm.go("wait"):
+                        raise SafetyAbort("포스트잇 대기 자세로 가지 못했습니다")
+                    return
+            last = (cx, cy, pan if pan is not None else 0.0)
+            if abs(error) > cfg.track_deadband_px:
+                step = sign * cfg.track_gain_deg_per_px * error
+                step = max(-cfg.track_max_step_deg, min(cfg.track_max_step_deg, step))
+                self.arm.nudge_pan(step, center, cfg.track_pan_limit_deg)
+            self.sleep(cfg.track_period)
+
+    def wait_for_car_and_start(self):
+        """차를 감지 → (추적 모드면 쫓아가서 멈추면 wait 자세로) → 포스트잇이 정차 구역에 멈춘 것을 확인 → 색 판정 → 새 작업 기록"""
+        t0 = self.clock()
+        if not self.cfg.tracking_enabled:
+            vote = self.confirm_arrival(t0)
+        else:
+            need_motion = False
+            while True:
+                self.track_until_stopped(t0, need_motion)
+                vote = self.confirm_arrival(t0, timeout=self.cfg.arrival_timeout)
+                if vote is not None:
+                    break
+                self.log("warn", msg="정차 구역에서 포스트잇을 확인하지 못했어요 → 다시 추적 (횡단보도 등에서 멈춘 차일 수 있어요)")
+                need_motion = True
         if vote.used_default:
             self.log("warn", msg="색 투표 · 거리가 동률이라 고정 기본값 사용", vote=vote.counts)
         job_id = self.rec["job_id"] + 1

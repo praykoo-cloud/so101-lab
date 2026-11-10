@@ -20,7 +20,8 @@ CONFIG_FILE = MISSION_DIR / "config.json"
 
 # 티칭해야 하는 자세 이름 (data/poses.json 에 저장됨). 설명은 티칭 도구 화면에도 나온다
 POSE_HELP = {
-    "wait": "대기 자세: 그리퍼 카메라가 위에서 도로(자동차 정지 위치)를 내려다본다",
+    "watch": "추적 시작 자세: 멀리서 도로 전체와 다가오는 차가 보임 (추적 모드에서만 필요, 설정 8번에서 켜기)",
+    "wait": "포스트잇 대기 자세: 정차 위치의 차와 포스트잇이 크고 선명하게 보임 (색을 읽는 고정 자세)",
     "above_red": "빨간 공 바로 위 (안전 높이)",
     "red": "빨간 공을 집는 높이",
     "above_blue": "파란 공 바로 위 (안전 높이)",
@@ -34,6 +35,7 @@ POSE_HELP = {
 
 # 티칭해야 하는 구역 이름 → 설명. 관측 자세마다 카메라가 보는 곳이 달라서 구역 이름에 자세가 들어 있다
 ROI_HELP = {
+    "track_road": "watch 자세에서 차가 다니는 도로 구역 (추적 모드에서만 필요. 이 안에서만 차를 찾아요)",
     "arrival": "wait 자세에서 자동차(바구니)가 서는 구역",
     "note": "wait 자세에서 바구니 포스트잇이 보이는 구역",
     "stand_red": "recovery_wait/above_red 자세에서 받침대의 빨간 공 자리",
@@ -45,6 +47,19 @@ ROI_HELP = {
 }
 
 DEFAULT_ROIS = {name: [0, 0, 0, 0] for name in ROI_HELP}     # 0 = 아직 티칭 안 함
+
+# 우리 자동차를 등록할 때 찍는 방향 (카메라에서 보이는 차의 모습). 방향마다 사진을 여러 장 찍어도 된다
+CAR_DIRECTIONS = {
+    "front": "앞",
+    "back": "뒤",
+    "left": "왼쪽 옆",
+    "right": "오른쪽 옆",
+    "front_left": "앞 왼쪽 비스듬히",
+    "front_right": "앞 오른쪽 비스듬히",
+    "back_left": "뒤 왼쪽 비스듬히",
+    "back_right": "뒤 오른쪽 비스듬히",
+    "top": "위에서",
+}
 
 
 @dataclass
@@ -86,6 +101,39 @@ class MissionConfig:
     # 모터 온도 (도). 실측 후 고칠 것 (1일 차 확인 항목)
     temp_warn: float = 60.0
     temp_stop: float = 70.0
+    # 차 추적 (설정 8번에서 켜고 끈다. 꺼 두면 예전처럼 wait 자세 한 곳에서만 기다린다)
+    tracking_enabled: bool = False
+    track_pan_limit_deg: float = 25.0        # watch 자세의 받침(1번 관절) 각도에서 좌우로 이만큼까지만 돌아감
+    track_pan_sign: int = 1                  # 받침을 + 방향으로 돌렸을 때 차가 화면 가운데로 오면 1, 멀어지면 -1 (허브 3번 '추적 방향 확인'이 정지한 물체로 측정해 채움)
+    track_gain_deg_per_px: float = 0.04      # 차가 화면 가운데에서 1픽셀 벗어날 때 돌릴 각도 (작을수록 부드럽고 느림)
+    track_deadband_px: float = 30.0          # 가운데에서 이 안이면 돌리지 않음 (떨림 방지)
+    track_max_step_deg: float = 3.0          # 한 번에 최대 이만큼만 돌림 (안전)
+    track_use_car_look: bool = False         # 켜면 '등록한 우리 자동차 모양'과 닮은 덩어리만 차로 인정 (꺼 두면 크기·움직임만 봄)
+    track_look_min_score: float = 0.5        # 닮은 정도(0~1)가 이 값 이상이어야 우리 차로 인정
+    track_period: float = 0.2                # 추적을 몇 초마다 갱신할지
+    track_baseline_step_deg: float = 2.0     # 빈 도로 기준 사진을 받침 몇 도마다 한 장씩 찍을지 (작을수록 정확, 오래 걸림)
+    track_baseline_tol_deg: float = 1.5      # 지금 받침 각도와 이만큼 안에 있는 기준 사진이 있어야 차를 찾음 (없으면 안전하게 '못 찾음')
+    track_diff_threshold: int = 35           # 빈 도로 사진과 이만큼(0~255) 밝기가 다르면 '차 후보'
+    track_min_area: int = 1200               # 차 후보 덩어리 최소 크기(픽셀 수)
+    track_max_area: int = 150000             # 최대 크기 (화면 전체가 변하는 조명 변화 제외)
+    track_stop_seconds: float = 2.0          # 차가 이만큼 멈춰 있으면 '정차'로 보고 wait 자세로 이동
+    track_stop_px: float = 12.0              # 정차로 보는 움직임 오차(픽셀)
+    track_lost_seconds: float = 3.0          # 차가 이만큼 안 보이면 추적을 멈추고 watch 자세로 돌아감
+    arrival_timeout: float = 20.0            # wait 자세로 옮긴 뒤 이 시간 안에 정차 구역 확인이 안 되면 다시 추적
+    # YOLO 인식 (mission/yolo.py) · 팔이 차를 세우는 상차 방식 (mission/loading.py)
+    yolo_model: str = "arm_v1_yolo11n_320.onnx"   # mission/models 안의 파일 이름 (640 이 더 정확하지만 느림)
+    yolo_conf: float = 0.45                  # 확신 정도가 이보다 낮은 것은 버린다 (0~1)
+    load_wait_pose: str = "watch"            # 대기 자세 이름: 차가 오는 쪽을 바라보는 고정 자세
+    load_stop_lead_deg: float = 2.0          # 기준 받침 각도보다 이만큼 먼저 정지 신호를 낸다 (차가 미끄러지는 만큼)
+    load_stop_confirm_seconds: float = 1.5   # 정지 신호 뒤 차가 이만큼 연속으로 안 움직여야 '완전 정차' (1~2초)
+    load_stop_timeout: float = 15.0          # 정지 신호 뒤 이 시간 안에 완전 정차가 안 되면 이번 차는 포기 (FAILED)
+    load_pan_margin_deg: float = 15.0        # 추적할 때 받침이 '대기 자세 ~ 기준 각도' 밖으로 더 돌 수 있는 여유
+    load_offset_max_deg: float = 25.0        # 차 위치 보정으로 받침을 더 돌리는 최대 각도 (넘으면 그 시도는 실패)
+    load_color_frames: int = 15              # 포스트잇 색을 정할 때 보는 사진 수
+    load_verify_seconds: float = 3.0         # 넣은 뒤 '공이 든 상자' 를 이 시간 동안 찾아본다
+    load_verify_hits: int = 3                # 그동안 이만큼 넘게 보여야 성공
+    load_retry_wait_seconds: float = 5.0     # 실패 후 다음 시도 전에 기다리는 시간 (떨어진 공을 사람이 제자리에 놓는 시간)
+    load_leave_timeout: float = 30.0         # 결과를 알린 뒤 차가 떠나기를 기다리는 최대 시간
     # 통신
     state_hz: float = 1.0                    # 상태 메시지를 이 주기로 계속 발행
     ros_domain_note: str = "팀 전용 ROS_DOMAIN_ID 를 환경변수로 설정 (두 Pi 같은 값)"
@@ -106,6 +154,13 @@ class MissionConfig:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(asdict(self), indent=2, ensure_ascii=False), encoding="utf-8")
         return path
+
+    def required_poses(self) -> list[str]:
+        """지금 설정에서 꼭 티칭해야 하는 자세 (rest 는 선택, watch 는 추적을 켰을 때만)"""
+        return [n for n in POSE_HELP if n != "rest" and (n != "watch" or self.tracking_enabled)]
+
+    def required_rois(self) -> list[str]:
+        return [n for n in ROI_HELP if n != "track_road" or self.tracking_enabled]
 
     def roi(self, name: str) -> list[int]:
         return [int(v) for v in self.rois.get(name, [0, 0, 0, 0])]

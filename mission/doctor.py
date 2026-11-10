@@ -95,15 +95,17 @@ def collect(studio: bool = False, fake: bool = False, check_camera: bool = True)
                 add(False, "카메라", f"카메라 확인 실패: {e}")
 
     # 자세
-    missing = [n for n in POSE_HELP if n not in poses_taught and n != "rest"]
-    add(not missing, "자세", f"자세 티칭 {len(POSE_HELP) - 1 - len(missing)}/{len(POSE_HELP) - 1}",
+    required = cfg.required_poses()                    # 추적을 켰을 때만 watch 도 필요
+    missing = [n for n in required if n not in poses_taught]
+    add(not missing, "자세", f"자세 티칭 {len(required) - len(missing)}/{len(required)}",
         f"남은 자세: {', '.join(missing)}  → 메뉴 3번" if missing else "")
     add(cfg.grip_ball_max_pct > 0, "자세", "공 쥔 그리퍼 % " + (f"{cfg.grip_ball_min_pct:.0f}~{cfg.grip_ball_max_pct:.0f}" if cfg.grip_ball_max_pct > 0 else "티칭 안 함"),
         "" if cfg.grip_ball_max_pct > 0 else "공을 그리퍼에 물린 채 메뉴 3번의 ballgrip")
 
     # 구역
-    left = [n for n in ROI_HELP if not cfg.roi_taught(n)]
-    add(not left, "구역", f"구역 티칭 {len(ROI_HELP) - len(left)}/{len(ROI_HELP)}",
+    required_rois = cfg.required_rois()
+    left = [n for n in required_rois if not cfg.roi_taught(n)]
+    add(not left, "구역", f"구역 티칭 {len(required_rois) - len(left)}/{len(required_rois)}" + (" (추적 켜짐)" if cfg.tracking_enabled else ""),
         f"남은 구역: {', '.join(left)}  → 메뉴 4번" if left else "")
 
     # 색

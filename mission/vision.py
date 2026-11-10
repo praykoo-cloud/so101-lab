@@ -189,6 +189,136 @@ def find_note(frame, roi, cfg: MissionConfig, refs: ColorRefs | None = None) -> 
     return Note((x + ox, y + oy, w, h), (float(cx + ox), float(cy + oy)), area, med)
 
 
+BASELINE_FILE = RUNTIME_DIR / "watch_baseline.png"     # 옛 방식: 받침 가운데(0도)에서 찍은 '빈 도로' 한 장
+BASELINES_DIR = RUNTIME_DIR / "watch_baselines"        # 받침 각도별 '빈 도로' 사진 (pan_+000.png, pan_-002.png ...)
+
+
+CAR_VIEWS_DIR = RUNTIME_DIR / "car_views"              # 우리 자동차 등록 사진 (방향별: front_1.png, left_2.png ...)
+
+
+def car_view_name(direction: str, number: int) -> str:
+    return f"{direction}_{number}.png"
+
+
+def list_car_views(folder=None) -> dict:
+    """{방향: [파일 경로, ...]} (사진 번호 순)"""
+    from .config import CAR_DIRECTIONS
+    folder = Path(CAR_VIEWS_DIR if folder is None else folder)
+    out = {d: [] for d in CAR_DIRECTIONS}
+    if folder.exists():
+        for path in sorted(folder.glob("*.png")):
+            direction, _, number = path.stem.rpartition("_")
+            if direction in out and number.isdigit():
+                out[direction].append(path)
+        for paths in out.values():
+            paths.sort(key=lambda p: int(p.stem.rpartition("_")[2]))
+    return out
+
+
+def save_car_view(direction: str, crop, folder=None) -> Path:
+    """자동차를 네모로 잘라 낸 사진을 저장한다 (방향마다 번호가 1, 2, 3 … 으로 늘어난다)"""
+    from .config import CAR_DIRECTIONS
+    if direction not in CAR_DIRECTIONS:
+        raise ValueError(f"모르는 방향: {direction}")
+    folder = Path(CAR_VIEWS_DIR if folder is None else folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    number = len(list_car_views(folder)[direction]) + 1
+    path = folder / car_view_name(direction, number)
+    if not cv2.imwrite(str(path), crop):
+        raise ValueError("사진을 저장하지 못했어요. 폴더 권한을 확인하세요.")
+    return path
+
+
+def _hist(image):
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    hist = cv2.calcHist([hsv], [0, 1, 2], None, [8, 4, 4], [0, 180, 0, 256, 0, 256])
+    return cv2.normalize(hist, hist).flatten()
+
+
+def car_look_score(frame, bbox, folder=None) -> float | None:
+    """화면의 한 덩어리가 '등록한 우리 자동차 사진들'과 색 분포로 얼마나 닮았는지 (0~1, 클수록 닮음).
+    등록한 사진이 없으면 None (= 판단하지 않음). 완벽한 방법은 아니고 '엉뚱한 물체'를 걸러내는 보조 수단이다"""
+    x, y, w, h = [int(v) for v in bbox]
+    candidate = frame[max(0, y):y + h, max(0, x):x + w]
+    if candidate.size == 0:
+        return 0.0
+    cand = _hist(candidate)
+    best = None
+    for paths in list_car_views(folder).values():
+        for path in paths:
+            image = cv2.imread(str(path))
+            if image is None or image.size == 0:
+                continue
+            score = max(0.0, float(cv2.compareHist(cand.astype(np.float32), _hist(image).astype(np.float32), cv2.HISTCMP_CORREL)))
+            best = score if best is None else max(best, score)
+    return best
+
+
+def baseline_name(offset: int) -> str:
+    return f"pan_{offset:+04d}.png"
+
+
+def read_baselines(folder=None, legacy=None) -> dict:
+    """{각도(정수 도): 사진}. 폴더에 사진이 없으면 옛 한 장 사진을 0도로 쓴다 (경로는 부를 때 정한다 → 시험에서 바꿔 끼울 수 있음)"""
+    out = {}
+    folder = Path(BASELINES_DIR if folder is None else folder)
+    legacy = BASELINE_FILE if legacy is None else legacy
+    if folder.exists():
+        for path in sorted(folder.glob("pan_*.png")):
+            try:
+                offset = int(path.stem.split("_", 1)[1])
+            except ValueError:
+                continue
+            image = cv2.imread(str(path))
+            if image is not None:
+                out[offset] = image
+    if not out and Path(legacy).exists():
+        image = cv2.imread(str(legacy))
+        if image is not None:
+            out[0] = image
+    return out
+
+
+@dataclass
+class Car:
+    bbox: tuple          # 화면 전체 기준 (x, y, w, h)
+    centroid: tuple      # (cx, cy)
+    area: int
+
+
+@dataclass
+class CarSeen:
+    """한 프레임에서 본 결과. car 가 None 이면 차를 못 찾음"""
+    car: Car | None
+    width: int
+    height: int
+
+
+def find_car(frame, baseline, roi, cfg: MissionConfig) -> Car | None:
+    """빈 도로 기준 사진과 비교해 **바뀐 가장 큰 덩어리** = 차 후보 (색은 보지 않는다).
+    roi = 차가 다니는 도로 구역 (없으면 화면 전체). 조명이 화면 전체에서 바뀐 경우는 너무 커서 제외된다"""
+    if baseline is None or frame.shape != baseline.shape:
+        return None
+    if roi is None or roi[2] <= 0 or roi[3] <= 0:
+        roi = [0, 0, frame.shape[1], frame.shape[0]]
+    sub, (ox, oy) = crop(frame, roi)
+    base, _ = crop(baseline, roi)
+    if sub.size == 0:
+        return None
+    gray = cv2.GaussianBlur(cv2.cvtColor(sub, cv2.COLOR_BGR2GRAY), (7, 7), 0)
+    base_gray = cv2.GaussianBlur(cv2.cvtColor(base, cv2.COLOR_BGR2GRAY), (7, 7), 0)
+    mask = (cv2.absdiff(gray, base_gray) >= cfg.track_diff_threshold).astype(np.uint8) * 255
+    kernel = np.ones((5, 5), np.uint8)
+    mask = cv2.morphologyEx(cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel), cv2.MORPH_CLOSE, kernel)
+    n, _, stats, cents = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    best = None
+    for i in range(1, n):
+        x, y, w, h, area = [int(v) for v in stats[i]]
+        if cfg.track_min_area <= area <= cfg.track_max_area and (best is None or area > best[0]):
+            best = (area, (x + ox, y + oy, w, h), (float(cents[i][0] + ox), float(cents[i][1] + oy)))
+    return Car(best[1], best[2], best[0]) if best else None
+
+
 @dataclass
 class ColorVote:
     color: str
@@ -321,6 +451,34 @@ class Vision:
 
     def reset_arrival(self):
         self._arr_start = self._arr_pos = None
+
+    # 추적 (watch 자세에서 차 찾기) ------------------------------------
+    def load_baselines(self, folder=None, legacy=None):
+        """받침 각도별 빈 도로 사진을 읽는다 {watch 자세 기준 각도(도): 사진}. 옛 한 장 사진은 0도로 쓴다"""
+        self.baselines = read_baselines(folder, legacy)
+        return bool(self.baselines)
+
+    def has_baseline(self) -> bool:
+        if getattr(self, "baselines", None) is None:
+            self.load_baselines()
+        return 0 in (getattr(self, "baselines", None) or {})        # 최소한 받침이 가운데(0도)일 때의 사진은 있어야 한다
+
+    def car_step(self, pan_offset: float = 0.0) -> CarSeen | None:
+        """한 프레임을 보고 차를 찾는다. **지금 받침 각도(watch 자세 기준 pan_offset)와 가장 가까운 기준 사진**과 비교한다.
+        가까운 사진이 없으면(허용 각도 밖) 틀린 비교를 하느니 '못 찾음'으로 둔다. 프레임이 안 들어오면 None"""
+        f = self._frame()
+        if f is None or not self.has_baseline():
+            return None
+        key = min(self.baselines, key=lambda k: abs(k - pan_offset))
+        if abs(key - pan_offset) > self.cfg.track_baseline_tol_deg:
+            return CarSeen(None, f.shape[1], f.shape[0])
+        roi = self.cfg.roi("track_road") if self.cfg.roi_taught("track_road") else None
+        car = find_car(f, self.baselines[key], roi, self.cfg)
+        if car is not None and self.cfg.track_use_car_look:        # 등록한 우리 자동차 모양과 닮지 않으면 다른 물체로 본다
+            score = car_look_score(f, car.bbox)
+            if score is not None and score < self.cfg.track_look_min_score:
+                car = None
+        return CarSeen(car, f.shape[1], f.shape[0])
 
     # 색 --------------------------------------------------------------
     def read_color(self) -> ColorVote | None:

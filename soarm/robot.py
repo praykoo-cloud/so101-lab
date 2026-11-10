@@ -329,12 +329,12 @@ class Robot:
             out[name] = {**entry, "angles": {sid: pos_to_deg(p) for sid, p in raw.items()}}
         return out
 
-    def save_pose(self, name: str) -> dict:
+    def save_pose(self, name: str, *, positions: Optional[dict] = None) -> dict:
         """지금 자세를 이름 붙여 저장 (data/poses.json)"""
         if not name:
             raise ValueError("자세 이름이 비었습니다")
         all_poses = _load_json(POSES_FILE, {})
-        entry = {"positions": _encode(self.positions()), "format": POSE_FORMAT,
+        entry = {"positions": _encode(self.positions() if positions is None else positions), "format": POSE_FORMAT,
                  "robot": drv.CALIBRATION_LABEL, "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
         all_poses[name] = entry
         _save_json(POSES_FILE, all_poses)

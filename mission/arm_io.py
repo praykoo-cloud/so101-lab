@@ -84,6 +84,21 @@ class ArmIO:
     def grip_pct(self) -> float | None:
         return self.robot.gripper_percent()
 
+    # ── 받침(1번 관절)만 조금씩 돌려 차를 따라간다 ──────────────────────
+    def pan_angle(self) -> float | None:
+        return self.robot.angles().get(1)
+
+    def nudge_pan(self, delta_deg: float, center_deg: float, limit_deg: float) -> float | None:
+        """받침을 delta 만큼 돌린다. center ± limit 밖으로는 절대 안 간다 (안전). 돌린 목표 각도를 돌려준다"""
+        current = self.pan_angle()
+        if current is None:
+            return None
+        target = max(center_deg - limit_deg, min(center_deg + limit_deg, current + delta_deg))
+        if abs(target - current) < 0.05:
+            return current
+        self.robot.move(1, target, speed=self.cfg.speed_slow)      # 기다리지 않고 명령만 (다음 프레임에서 다시 본다)
+        return target
+
     # ── 자세 확인 (clear 를 내기 전 "실제로 그 자세인가") ────────────────
     def pose_error_deg(self, pose: str) -> float | None:
         """지금 관절과 저장된 자세의 가장 큰 각도 차이 (그리퍼 제외). 못 읽으면 None"""

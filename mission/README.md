@@ -59,15 +59,23 @@ ArmStudio 앱을 켜 두면(앱 창이 열려 있어야 카메라가 나온다) 
 ## 2. 티칭 순서 (실물, 1일 차)
 
 0. 팔 · 카메라 연결 확인. 그리퍼 카메라 번호는 `camera/c1_find_camera.py` 로 찾아 `mission/config.json` 의 `camera` 에.
-1. **자세**: `python -m mission.m0_teach_poses` → `off`(손으로 받치고) → 팔을 옮김 → `save wait` …
-   필요한 자세: `wait, above_red, red, above_blue, blue, above_basket, basket, retreat_mid, recovery_wait`
-   마지막에 그리퍼에 공을 물린 채 `ballgrip`. **자세 사이는 직선으로 오가도 부딪히지 않아야 합니다.**
-2. **구역**: 각 자세로 팔을 보낸 뒤 `python -m mission.m0_teach_rois --only 이름`
-   (`--list` 로 남은 것 확인)
-3. **색**: `python -m mission.m0_teach_colors teach note_red` … `note_blue`, `ball_red`, `ball_blue`
-   → `verify` 로 실시간 확인 → **둘 다 검증한 뒤** `lock` (주문이 정해지기 전에!)
+1. **자세**: Pi에서 `bash "배달 한방.sh"` → **3번 자세 티칭 → 2번 실물 팔**을 고릅니다.
+   VS Code 아래쪽 **Ports → Forward a Port**에서 `8081`을 전달한 뒤 브라우저 아이콘을 누릅니다.
+   기존 카메라 미리보기가 열려 있으면 먼저 끄세요. 손목 영상이 보이면 팔을 손으로 받치고
+   **팔 힘 풀기 → 자세 선택 → 저장** 순으로 진행합니다. **↑·↓**로 자세 선택, **S**로 저장할 수 있습니다.
+   마지막에는 **공을 쥔 집게**를 골라 저장합니다. **자세 사이는 직선으로 오가도 부딪히지 않아야 합니다.**
+   가상 팔 화면은 메뉴 3번의 **1번**으로 열 수 있고, 연습한 자세는 파일에 저장되지 않습니다.
+2. **구역**: 메뉴 **4번**을 열고 같은 브라우저 탭을 새로고침합니다. 항목의 설명에 맞춰 팔의 자세를 잡고,
+   **Space**로 화면을 멈춘 뒤 영상 위에서 네모를 그려 **S**로 저장합니다.
+3. **색**: 메뉴 **5번**에서 빨강·파랑 포스트잇과 공을 각각 같은 방식으로 등록합니다. 색이 고른 부분만 선택합니다.
+   **6번**에서 두 포스트잇을 번갈아 보여 판정을 확인합니다. **12번**에서는 차가 지나갈 때와
+   상차 구역에 멈췄을 때를 비교합니다. 검증이 끝나면 주문 배정 전에 **7번**으로 기준색을 잠급니다.
 4. 설치: `python -m mission.mission_main --init-store` (작업 기록 만들기, 한 번만)
 5. 먼저 `--no-ros` 로 팔 + 카메라만, 천천히. 그다음 자동차와 연결.
+
+카메라 화면은 **2번 → Enter**로도 열 수 있습니다. 다른 카메라 메뉴로 넘어갈 때는 화면에서
+**티칭 끝내기**를 누르고, 새 메뉴를 고른 뒤 기존 브라우저 탭을 새로고침합니다.
+경기용 **10번**은 Pi 내부에서 카메라를 사용합니다. 경기 전에 브라우저와 SSH 연결을 닫습니다.
 
 ```bash
 python -m mission.mission_main --no-ros      # ROS2 없이 (통신은 메모리에만)
@@ -94,3 +102,34 @@ python -m mission.mission_main               # 실제 (Pi 의 Docker, ROS2, 팀 
 | | 그리퍼 % 기준, 모터 온도 기준 (`config.py` 숫자는 임시값) |
 
 실물에서 처음 돌릴 때: 주변을 비우고, `speed_slow` 를 낮추고, 전원 스위치에 손을 두세요.
+
+## 5. 새 방식: 팔이 차를 세우고 출발시킨다 (2026-11-10 추가)
+
+팀 합의(`Team_koo/docs/interfaces.md`)에 맞춰 **새 실행 파일**을 따로 만들었다. 위 1~4절의 `mission_main.py` 는 예전 방식(차가 스스로 섬)이며 지우지 않고 남겨 두었다.
+
+| 파일 | 하는 일 |
+|---|---|
+| `motions.py` | **동작 저장소**: 동작 = 자세 여러 개를 순서대로. 같은 동작을 여러 회차로 저장 · 이름 변경 · 삭제 · ★ 선택 · 성적표. `data/motions.json` |
+| `motion_page.py` | 허브 **16번 동작 티칭** 화면 (힘 빼기 → 지점 추가 → 저장 → ▶ 재생 → 잘 됨/안 됨 → ★ 이걸로 사용) |
+| `yolo.py` | **YOLO 인식** (`models/arm_v1_yolo11n_320.onnx`, OpenCV 만 사용): 차 · 상자 · 포스트잇 · 공이 든 상자. 허브 **17번**에서 확인 |
+| `loading.py` | **상차 미션 본체**: 추적 → 정지 신호 → 계속 추적하며 완전 정차 확인(1.5초) → 색 → 집기 → 넣기 → 성공 확인 → 출발 신호 |
+| `load_link.py` | 차와 통신: `/arm/loading_status` (LoadingStatus) 발행, `/car/status` (CarStatus) 수신. `--no-ros` 면 화면 출력만 |
+
+준비 순서 (실물):
+1. 허브 3번: 대기 자세 `watch` (차가 오는 쪽을 바라보는 고정 자세)
+2. 허브 17번: 차를 기준 정차 위치에 세우고, 받침을 돌려 상자가 화면 가운데에 오게 한다
+3. 허브 16번 ⑤: "지금 받침 각도를 기준으로 저장"
+4. 허브 16번 ①: `빨간공_집기` · `파란공_집기` · `바구니_넣기` 를 각각 여러 회차 가르치고 ▶ 재생 → ★ 선택
+   - `바구니_넣기` 의 마지막 지점은 **바구니 안이 카메라에 보이는 자세**로 끝낸다 (성공 확인을 그 자리에서 한다)
+5. `python -m mission.loading --check` → `--no-ros` → (Docker) 인자 없이
+
+```bash
+python -m mission.hub --start motion             # 16번 화면 (Windows: 동작티칭_한방.cmd)
+python -m mission.hub --start motion --fake-arm  # 팔 없이 화면만 눌러 보기
+python -m mission.loading --check                # 준비 확인 (팔 안 움직임)
+python -m mission.loading --no-ros --jobs 1      # 차 통신 없이 한 대만
+python -m unittest tests.test_mission_motions tests.test_mission_loading
+```
+
+차 쪽과 맞출 내용 · 합의 문서와 다른 곳: `docs/mission/interface-draft.md`.
+확인 못 한 것: 실물 팔 · 실제 카메라에서의 YOLO · ROS2 통신 · 차가 앞뒤로 어긋났을 때의 넣기.

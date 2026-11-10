@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>배달 한방 · 자세 티칭</title>
+<style>
+  body { font: 16px system-ui, sans-serif; color: #17233a; background: #eef3f8; margin: 0; }
+  main { max-width: 1120px; margin: auto; padding: 24px; }
+  h1 { margin: 0 0 8px; }
+  .grid { display: grid; grid-template-columns: 3fr 2fr; gap: 16px; }
+  section { background: #fff; border-radius: 12px; padding: 16px; }
+  .viewer { position: relative; background: #142136; color: white; aspect-ratio: 4/3; display: grid; place-items: center; }
+  img, #placeholder { grid-area: 1/1; }
+  img { width: 100%; height: 100%; }
+  svg { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
+  svg[hidden] { display: none; }
+  rect { fill: #37bfec30; stroke: #73e5ff; stroke-width: 2; }
+  button, select { font: inherit; padding: 10px; border: 1px solid #667a96; border-radius: 6px; }
+  select { width: 100%; }
+  button { background: #edf2fb; margin: 4px 4px 4px 0; cursor: pointer; }
+  button:disabled { opacity: .55; cursor: default; }
+  #save:not(:disabled) { color: white; background: #1457a6; }
+  #notice { min-height: 1.5em; }
+  #status:empty { display: none; }
+  #status { margin: 8px 0 12px; padding: 10px 12px; border-radius: 8px; background: #fff4c7; border: 2px solid #d9a400; font-weight: 600; }
+  #status.ok { background: #dff5e3; border-color: #2e9d4a; }
+  #status.bad { background: #fde3e1; border-color: #c0392b; }
+  @media (max-width: 750px) { .grid { grid-template-columns: 1fr; } }
+</style>
+<main>
+  <h1 id="title">배달 한방</h1>
+  <p id="mode"></p>
+  <div class="grid">
+    <section>
+      <strong>손목 카메라</strong>
+      <p id="video-status" role="status">카메라 영상을 기다리는 중이에요.</p>
+      <div class="viewer" id="viewer">
+        <span id="placeholder">영상 연결 중</span>
+        <img id="camera" alt="손목 카메라 영상" hidden>
+        <img id="still" alt="멈춘 카메라 영상" hidden>
+        <svg id="selection" hidden aria-label="마우스로 저장할 구역 선택"><rect id="box"></rect></svg>
+      </div>
+      <p id="result" role="status" hidden></p>
+    </section>
+    <section>
+      <h2 id="heading"></h2>
+      <p id="status" role="status" aria-live="polite"></p>
+      <p id="notice"></p>
+      <button id="release" hidden disabled>팔 힘 풀기</button>
+      <div id="editor" hidden>
+        <label for="pose" id="select-label">저장할 항목</label>
+        <select id="pose"></select>
+        <p id="hint"></p>
+        <p id="detail" role="status"></p>
+        <button id="freeze" hidden disabled>화면 멈추기</button>
+        <button id="save" disabled>선택한 항목 저장</button>
+        <button id="remove" disabled>저장값 지우기</button>
+        <button id="compare" hidden>저장한 자세와 실시간 비교</button>
+        <button id="probe" hidden>추적 방향 확인 (받침 2° 시험)</button>
+        <button id="sweep" hidden>빈 도로 기준 사진 전체 촬영 (받침 좌우 자동)</button>
+        <button id="baseline" hidden>빈 도로 기준 사진 1장 저장</button>
+        <p id="compare-out" role="status" hidden></p>
+        <p>단축키 <kbd>↑</kbd> <kbd>↓</kbd> 항목 선택 · <kbd>S</kbd> 저장<span id="freeze-key" hidden> · <kbd>Space</kbd> 화면 멈추기/다시 보기</span></p>
+      </div>
+      <details open><summary>오차 범위 · 기준값</summary><ul id="limits"></ul></details>
+      <button id="finish">티칭 끝내기</button>
+    </section>
+  </div>
+</main>
+<script>
+"use strict";
+const { token, items, fake, mode, title, limits } = /* TEACHING_DATA */ null;
+const element = id => document.getElementById(id);
+const select = element("pose");
+const image = element("camera");
+const still = element("still");
+const selection = element("selection");
+const saveButton = element("save");
+const poseMode = mode === "pose";
+const drawMode = mode === "roi" || mode === "color" || mode === "car";
+const resultText = {
+  red: "판정 결과 · 빨강", blue: "판정 결과 · 파랑", missing: "포스트잇을 찾는 중이에요.",
+  untaught: "5번에서 빨간 포스트잇과 파란 포스트잇을 먼저 등록하세요.",
+  needs_zones: "4번에서 ‘차가 멈추는 구역’과 ‘포스트잇을 찾는 구역’을 먼저 저장하세요.",
+  arrived: "차 도착 조건 통과 · 상차 구역에서 정차했어요.",
+  waiting: "정차를 기다리는 중 · 표시된 구역 안에 포스트잇이 들어와야 해요."
+};
+let saved = new Set();
+let released = false;
+let video = null;
+let busy = false;
+let ended = false;
+let imageUrl;
+let frozen = null;
+let rectangle = null;
+let start = null;
+let locked = false;
+let details = {};
+
+document.title = element("title").textContent = "배달 한방 · " + title;
+element("heading").textContent = title;
+element("mode").textContent = "경기 전 준비 화면";
+element("release").hidden = !poseMode;
+element("detail").hidden = element("remove").hidden = !items.length;
+element("editor").hidden = !items.length;
+element("freeze-key").hidden = element("freeze").hidden = !drawMode;
+element("result").hidden = !["verify", "arrival"].includes(mode);
+element("select-label").textContent = poseMode ? "저장할 자세" : "저장할 항목";
+for (const text of limits || []) {
+  const line = document.createElement("li");
+  line.textContent = text;
+  element("limits").append(line);
+}
+
+function update() {
+  element("finish").disabled = ended || busy;
+  if (!items.length) {
+    element("notice").textContent = mode === "arrival" ? "팔을 대기 자세에 두고, 차가 지나갈 때와 구역 안에 멈출 때를 각각 확인하세요. 이 화면은 팔을 움직이지 않아요."
+      : mode === "verify" ? "빨간 포스트잇과 파란 포스트잇을 번갈아 보여주고 화면의 판정 결과를 확인하세요."
+      : "손목 카메라의 방향과 시야를 확인하세요.";
+    return;
+  }
+  const index = Math.max(0, select.selectedIndex);
+  if (!select.options.length) {
+    for (const item of items) select.add(new Option(item.label, item.name));
+  }
+  select.selectedIndex = index;
+  for (const [i, item] of items.entries()) {
+    select.options[i].textContent = item.label + (saved.has(item.name) ? " ✓ 저장됨" : "");
+  }
+  const pose = items[index];
+  element("hint").textContent = pose.help;
+  element("detail").textContent = saved.has(pose.name)
+    ? "저장된 값 · " + (details[pose.name] || "저장됨") + " (마음에 안 들면 ‘저장값 지우기’ 또는 새로 저장)"
+    : "아직 저장하지 않았어요.";
+  element("remove").disabled = ended || busy || locked || !saved.has(pose.name);
+  saveButton.textContent = pose.label + " 저장";
+  saveButton.disabled = ended || busy || !video || locked || (poseMode ? !released : !frozen || !rectangle);
+  element("release").disabled = ended || busy || !video || released;
+  element("freeze").disabled = ended || busy || locked || (!video && !frozen);
+  element("freeze").textContent = frozen ? "실시간 영상 다시 보기" : "화면 멈추기";
+  element("notice").textContent = locked ? "설정이 잠겼어요. 확인만 할 수 있어요."
+    : drawMode ? "① 항목 선택 → ② 화면 멈추기 → ③ 네모 그리기 → ④ 저장"
+    : released ? "팔의 힘을 풀었어요. 팔을 받친 채 카메라를 보면서 자세를 잡으세요."
+    : "팔을 손으로 받친 뒤 ‘팔 힘 풀기’를 누르세요.";
+}
+
+function showFrame() {
+  image.hidden = !video || !!frozen;
+  still.hidden = !frozen;
+  selection.toggleAttribute("hidden", !frozen);
+  element("placeholder").hidden = video || !!frozen;
+  const shown = frozen ? still : image;
+  if (shown.naturalWidth) element("viewer").style.aspectRatio = shown.naturalWidth + "/" + shown.naturalHeight;
+}
+
+function setVideo(available) {
+  if (video === available) return;
+  video = available;
+  showFrame();
+  element("placeholder").textContent = "영상 연결 대기 중";
+  element("video-status").textContent = available ? "영상 연결됨"
+    : "영상이 들어오지 않아요. 연결을 확인하면 자동으로 다시 시도해요.";
+  update();
+}
+
+async function preview() {
+  try {
+    const response = await fetch("/frame", {
+      headers: { "X-Teaching-Token": token }, signal: AbortSignal.timeout(1000)
+    });
+    if (response.status === 403) {
+      setVideo(false);
+      element("status").textContent = "메뉴가 바뀌었어요. 이 브라우저 탭을 새로고침하세요.";
+      return;
+    }
+    if (!response.ok) throw new Error();
+    const next = URL.createObjectURL(await response.blob());
+    const previous = imageUrl;
+    imageUrl = next;
+    image.src = next;
+    if (previous) URL.revokeObjectURL(previous);
+    await image.decode();
+    if (!ended) {
+      setVideo(true);
+      if (!frozen) showFrame();
+      const message = resultText[response.headers.get("X-Camera-Result")] || "";
+      if (element("result").textContent !== message) element("result").textContent = message;
+    }
+  } catch {
+    if (!ended) setVideo(false);
+    element("result").textContent = "";
+  }
+  if (!ended) setTimeout(preview, video ? 70 : 250);
+}
+
+async function send(action, fields = {}) {
+  if (busy || ended) return;
+  busy = true;
+  update();
+  try {
+    const response = await fetch("/action", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Teaching-Token": token },
+      body: JSON.stringify({ action, ...fields })
+    });
+    const result = await response.json();
+    released = result.released;
+    locked = result.locked;
+    if (result.saved) saved = new Set(result.saved);
+    if (result.details) details = result.details;
+    element("status").textContent = (response.ok ? "✔ " : "✘ ") + result.message;
+    element("status").className = response.ok ? "ok" : "bad";
+    element("status").scrollIntoView({ block: "nearest" });
+    if (response.ok && action === "finish") {
+      ended = true;
+      setVideo(false);
+      element("video-status").textContent = "티칭을 끝냈어요.";
+    }
+    return response.ok ? result : null;
+  } catch {
+    setVideo(false);
+    element("status").textContent = "Pi와 연결이 끊겼어요. 터미널을 확인하세요.";
+  } finally {
+    busy = false;
+    update();
+  }
+}
+
+function saveItem() {
+  if (saveButton.disabled) return;
+  const pose = items[select.selectedIndex];
+  const replace = saved.has(pose.name) && mode !== "car";       // 자동차 사진은 방향마다 여러 장을 쌓는다 (덮어쓰기 아님)
+  if (replace && !confirm("이미 저장한 ‘" + pose.label + "’ 값을 바꿀까요?")) return;
+  send("save", { name: pose.name, replace, frozen, rect: rectangle });
+}
+
+function drawBox(rect) {
+  const box = element("box");
+  for (const [i, attr] of ["x", "y", "width", "height"].entries()) box.setAttribute(attr, rect[i]);
+}
+
+function resetBox() {
+  start = rectangle = null;
+  drawBox([0, 0, 0, 0]);
+}
+
+async function toggleFreeze() {
+  if (element("freeze").disabled) return;
+  if (frozen) {
+    frozen = null;
+    resetBox();
+    showFrame();
+    update();
+    return;
+  }
+  const result = await send("freeze");
+  if (!result) return;
+  try {
+    still.src = "/frozen/" + result.frozen;
+    await still.decode();
+    frozen = result.frozen;
+    selection.setAttribute("viewBox", "0 0 " + still.naturalWidth + " " + still.naturalHeight);
+    resetBox();
+    showFrame();
+    update();
+  } catch {
+    element("status").textContent = "멈춘 영상을 불러오지 못했어요. 다시 눌러주세요.";
+  }
+}
+
+function point(event) {
+  const bounds = selection.getBoundingClientRect();
+  const clamp = value => Math.max(0, Math.min(1, value));
+  return [
+    Math.round(clamp((event.clientX - bounds.left) / bounds.width) * still.naturalWidth),
+    Math.round(clamp((event.clientY - bounds.top) / bounds.height) * still.naturalHeight)
+  ];
+}
+
+selection.onpointerdown = event => {
+  if (!frozen || busy || ended || locked || event.button !== 0) return;
+  resetBox();
+  start = point(event);
+  selection.setPointerCapture(event.pointerId);
+  update();
+};
+selection.onpointermove = event => {
+  if (!start) return;
+  const [x, y] = point(event);
+  rectangle = [Math.min(x, start[0]), Math.min(y, start[1]), Math.abs(x - start[0]), Math.abs(y - start[1])];
+  drawBox(rectangle);
+};
+selection.onpointerup = event => {
+  if (!start) return;
+  selection.onpointermove(event);
+  start = null;
+  if (rectangle[2] < 4 || rectangle[3] < 4) resetBox();
+  update();
+};
+selection.onpointercancel = () => { resetBox(); update(); };
+
+element("release").onclick = () => {
+  if (confirm("팔이 내려앉을 수 있어요. 팔을 손으로 받치고 있나요?")) send("release");
+};
+element("finish").onclick = () => send("finish");
+let comparing = false;
+async function compareLoop() {
+  while (comparing && !ended) {
+    const item = items[select.selectedIndex];
+    try {
+      const response = await fetch("/action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Teaching-Token": token },
+        body: JSON.stringify({ action: "compare", name: item.name })
+      });
+      element("compare-out").textContent = (await response.json()).message;
+    } catch {
+      element("compare-out").textContent = "Pi와 연결이 끊겼어요. 터미널을 확인하세요.";
+    }
+    await new Promise(resolve => setTimeout(resolve, 800));
+  }
+}
+element("compare").hidden = element("compare-out").hidden = !poseMode;
+element("probe").hidden = element("sweep").hidden = !poseMode;
+element("sweep").onclick = () => {
+  if (confirm("받침이 좌우로 천천히 움직이며 각도별 ‘빈 도로’ 사진을 찍어요 (약 1분). 도로에 차 · 사람이 없고 팔 주변이 비어 있나요?\n끝나면 원래 자세로 돌아와요.")) send("baseline_sweep");
+};
+element("baseline").hidden = mode !== "roi";
+element("probe").onclick = () => {
+  if (confirm("받침(1번 모터)을 2도만 돌렸다가 원래 자리로 돌려놓아요. 도로 위에 차를 세워 두었고, 팔 주변이 비어 있나요?")) send("probe_pan");
+};
+element("baseline").onclick = () => {
+  if (confirm("추적 시작 자세에서 차 · 사람이 없는 ‘빈 도로’를 찍어요. 지금 화면이 빈 도로인가요?")) send("baseline");
+};
+element("compare").onclick = () => {
+  comparing = !comparing;
+  element("compare").textContent = comparing ? "실시간 비교 끄기" : "저장한 자세와 실시간 비교";
+  element("compare-out").textContent = comparing ? "비교하는 중이에요. 팔을 받친 채 손으로 자세를 맞추세요." : "";
+  if (comparing) compareLoop();
+};
+element("remove").onclick = () => {
+  if (element("remove").disabled) return;
+  const item = items[select.selectedIndex];
+  if (confirm("‘" + item.label + "’ 저장값을 지울까요?\n지우기 전에 백업이 자동으로 남아요. 지운 뒤 다시 저장하면 돼요.")) send("delete", { name: item.name });
+};
+saveButton.onclick = saveItem;
+element("freeze").onclick = toggleFreeze;
+select.onchange = () => { resetBox(); update(); };
+document.addEventListener("keydown", event => {
+  if (event.repeat || event.ctrlKey || event.altKey || event.metaKey || event.isComposing) return;
+  if (event.code === "KeyS") {
+    event.preventDefault();
+    saveItem();
+  } else if (drawMode && event.code === "Space" && !["BUTTON", "SELECT"].includes(event.target.tagName)) {
+    event.preventDefault();
+    toggleFreeze();
+  } else if (items.length && event.target !== select && ["ArrowUp", "ArrowDown"].includes(event.key)) {
+    event.preventDefault();
+    const step = event.key === "ArrowUp" ? -1 : 1;
+    select.selectedIndex = Math.max(0, Math.min(items.length - 1, select.selectedIndex + step));
+    resetBox();
+    update();
+  }
+});
+fetch("/state", { headers: { "X-Teaching-Token": token } }).then(response => response.json()).then(state => {
+  saved = new Set(state.saved);
+  details = state.details || {};
+  released = state.released;
+  locked = state.locked;
+  update();
+}).catch(() => {
+  element("status").textContent = "저장한 자세 목록을 읽지 못했어요. 터미널을 확인하세요.";
+});
+update();
+preview();
+</script>
+</html>
