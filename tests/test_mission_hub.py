@@ -92,15 +92,50 @@ class HubTest(unittest.TestCase):
         self.assertTrue(self.hub.camera.ready.wait(2))
 
     # ── 화면 ────────────────────────────────────────────────────────────
-    def test_home_has_all_twelve_categories_and_no_fake_wording(self):
+    def test_home_shows_only_new_menu_in_colored_groups_and_no_fake_wording(self):
         status, body = self.get("/hub")
         text = body.decode()
         self.assertEqual(status, 200)
+        self.assertEqual([c[0] for c in CATEGORIES], [1, 2, 3, 4, 5, 6])      # 예전 1~15번은 첫 화면에서 숨김
         for num, title, *_ in CATEGORIES:
             self.assertIn(title, text)
-        self.assertEqual(len(CATEGORIES), 18)                                  # 1~12 + 13 자동차 모양 + 14 저장된 사진 + 15 집기 연습 + 16 동작 티칭 + 17 YOLO + 18 상차 실행
+        for group in ("준비", "테스트", "실행", "설정"):
+            self.assertIn(group, text)
+        for cls in ("num g-prep", "num g-test", "num g-run", "num g-set"):    # 묶음마다 번호 색이 다르다
+            self.assertIn(cls, text)
+        for old_title in ("구역 설정", "색상 등록", "기준색 잠금", "집기 연습 · 학습", "자동차 모양 등록", "작업 기록"):
+            self.assertNotIn(old_title, text)
         for word in ("가상", "가짜", "PRACTICE", "연습용", "fake"):
             self.assertNotIn(word, text)
+
+    def test_new_pages_and_track_api(self):
+        status, body = self.get("/p/track")
+        self.assertEqual(status, 200)
+        self.assertIn("차 추적 테스트", body.decode())
+        status, body = self.get("/api/track/state")
+        state = json.loads(body)
+        self.assertEqual((status, state["state"], state["frames"]), (200, "idle", 0))
+        self.hub.ensure_arm = lambda: "팔 포트가 보이지 않아요. 팔 12V 전원과 USB 케이블을 확인하세요."
+        status, body = self.get("/p/watchpose")                             # 팔이 없으면 이유를 홈에 보여 준다
+        self.assertIn("팔 포트가 보이지 않아요", body.decode())
+        with self.assertRaises(urllib.error.HTTPError) as cm:               # 이미지는 추적을 시작하기 전에는 없다
+            self.get("/img/track.jpg")
+        self.assertEqual(cm.exception.code, 404)
+
+    def test_track_api_rules(self):
+        self.assertEqual(self.post("/api/track/stop", {}, token=False)[0], 403)        # 토큰 없으면 거절
+        status, data = self.post("/api/track/stop", {})
+        self.assertEqual(status, 400)
+        self.assertIn("추적 중이 아니", data["message"])
+        self.assertEqual(self.post("/api/track/save-sign", {"sign": 3})[0], 400)
+        status, data = self.post("/api/track/save-sign", {"sign": -1})
+        self.assertEqual(status, 200)
+        self.assertEqual(MissionConfig.load(self.cfg_path).track_pan_sign, -1)         # 임시 설정 파일에만 저장됨
+        self.hub.ensure_camera = lambda: "카메라를 열지 못했어요: 시험용 문제"
+        status, data = self.post("/api/track/start", {})
+        self.assertEqual(status, 400)
+        self.assertIn("시험용 문제", data["message"])
+        self.assertEqual(self.post("/api/watch/save", {})[0], 400)                      # 화면을 열기 전이면 안내
 
     def test_pages_open(self):
         for path in ("/p/doctor", "/p/settings", "/p/lock", "/p/store", "/p/run9", "/p/run10"):
@@ -115,7 +150,7 @@ class HubTest(unittest.TestCase):
         self.assertEqual(cm.exception.code, 404)
 
     def test_camera_error_is_explained_not_crash(self):
-        self.hub.ensure_camera = lambda: "손목 카메라 영상이 들어오지 않아요. USB 연결과 카메라 번호(설정 값 8번)를 확인하세요."
+        self.hub.ensure_camera = lambda: "손목 카메라 영상이 들어오지 않아요. USB 연결과 카메라 번호(설정 값 6번)를 확인하세요."
         status, body = self.get("/go/view")                       # 303 → 홈에 안내 문장
         self.assertEqual(status, 200)
         self.assertIn("손목 카메라 영상이 들어오지 않아요", body.decode())
@@ -728,7 +763,9 @@ class HubTest(unittest.TestCase):
                 return True
         self.hub.practice = Running()
         self.assertIsNotNone(self.hub.enter("roi"))
-        self.assertIn("15번", self.hub.enter("pose"))
+        self.assertIn("집기 연습", self.hub.enter("pose"))                  # 숨긴 15번 대신 이름으로 안내
+        self.assertIn("집기 연습", self.hub.open_motion())
+        self.assertIn("집기 연습", self.hub.open_watch())
         self.hub.practice = None
 
 

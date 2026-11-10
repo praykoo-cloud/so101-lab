@@ -1,6 +1,6 @@
 """동작 티칭 저장소 + 재생기. "동작" = 자세(지점) 여러 개를 순서대로 이은 것.
 
-화면으로 쓰려면 허브 16번 (python -m mission.hub --start motion). 이 파일은 그 뒤에서 일하는 부품이다.
+화면으로 쓰려면 허브 3번 (python -m mission.hub --start motion). 이 파일은 그 뒤에서 일하는 부품이다.
 
     book = MotionBook()                               # data/motions.json 을 읽고 쓴다
     book.create("빨간공_집기")                        # 동작 칸 만들기 (기본 3개는 처음부터 있다)
@@ -194,7 +194,7 @@ class MotionBook:
         entry = self.motion(name)
         tid = entry.get("chosen")
         if tid is None or tid not in entry["takes"]:
-            raise MotionError(f"동작 '{name}' 에 선택된 회차가 없어요 (허브 16번에서 가르치고 ★ 로 고르세요).")
+            raise MotionError(f"동작 '{name}' 에 선택된 회차가 없어요 (허브 3번에서 가르치고 ★ 로 고르세요).")
         return tid, entry["takes"][tid]
 
     # ── 재생 기록 · 성적 ────────────────────────────────────────────────

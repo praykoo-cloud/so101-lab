@@ -1,4 +1,4 @@
-"""허브 16번 '동작 티칭' 화면: 팔을 손으로 움직여 동작을 가르치고, 저장하고, 클릭해서 다시 재생해 본다.
+"""허브 3번 '동작 티칭' 화면: 팔을 손으로 움직여 동작을 가르치고, 저장하고, 클릭해서 다시 재생해 본다.
 
 실행:
     .venv\\Scripts\\python.exe -m mission.hub --start motion            (Windows, 실물 팔)
@@ -155,11 +155,11 @@ class MotionDesk:
             self._thread.join(timeout)
 
     def go_pose(self, pose: str) -> str:
-        """저장된 자세(허브 3번에서 티칭한 것)로 천천히 간다. 재생 전 시작 자리로 옮길 때 쓴다"""
+        """저장된 자세(허브 1번에서 저장한 것)로 천천히 간다. 재생 전 시작 자리로 옮길 때 쓴다"""
         self._need_idle()
         with self._arm_lock:
             if pose not in self.robot.poses():
-                raise MotionError(f"자세 '{pose}' 가 아직 저장되지 않았어요 (허브 3번 자세 티칭).")
+                raise MotionError(f"자세 '{pose}' 가 아직 저장되지 않았어요 (허브 1번 대기 자세 저장).")
             self.robot.torque(True)
             self.torque_on = True
             ok = self.arm.go(pose)
@@ -217,7 +217,7 @@ class MotionDesk:
 
 # ── 화면 ────────────────────────────────────────────────────────────────
 BODY = """
-<h1><span class=num>16</span>동작 티칭</h1>
+<h1><span class="num g-prep">3</span>동작 티칭</h1>
 <p class=sub>팔을 손으로 움직여 동작을 가르치고, 저장한 동작을 눌러서 다시 움직여 봅니다. 같은 동작을 여러 번 가르쳐 두고 가장 안정적인 회차를 고르세요.</p>
 <p class='msg warn' id=fake hidden>지금은 <b>가짜 팔</b>(화면 연습용)이에요. 실제 팔은 움직이지 않습니다.</p>
 <p class=msg id=out role=status aria-live=polite>준비됐어요.</p>
@@ -253,7 +253,7 @@ BODY = """
 
 <h2>⑤ 기준 차 위치</h2>
 <div class=msg><p id=ref-text></p>
-  <p class=small>차를 '기준 정차 위치'에 세워 두고, 팔을 대기 자세에서 받침만 돌려 차 위 상자가 화면 가운데에 오게 한 뒤 누르세요 (허브 17번 화면으로 확인).
+  <p class=small>차를 '기준 정차 위치'에 세워 두고, 팔을 대기 자세에서 받침만 돌려 차 위 상자가 화면 가운데에 오게 한 뒤 누르세요 (허브 2번 화면으로 확인).
   미션은 받침이 이 각도에 왔을 때 차에게 정지 신호를 보내고, '차 위치에 맞추는 동작'은 실제 정차 위치와 이 각도의 차이만큼 받침을 더 돌려 재생합니다.</p>
   <p><button id=ref class=sec>지금 받침 각도를 기준으로 저장</button></p></div>
 """

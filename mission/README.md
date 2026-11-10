@@ -110,25 +110,28 @@ python -m mission.mission_main               # 실제 (Pi 의 Docker, ROS2, 팀 
 | 파일 | 하는 일 |
 |---|---|
 | `motions.py` | **동작 저장소**: 동작 = 자세 여러 개를 순서대로. 같은 동작을 여러 회차로 저장 · 이름 변경 · 삭제 · ★ 선택 · 성적표. `data/motions.json` |
-| `motion_page.py` | 허브 **16번 동작 티칭** 화면 (힘 빼기 → 지점 추가 → 저장 → ▶ 재생 → 잘 됨/안 됨 → ★ 이걸로 사용) |
-| `yolo.py` | **YOLO 인식** (`models/arm_v1_yolo11n_320.onnx`, OpenCV 만 사용): 차 · 상자 · 포스트잇 · 공이 든 상자. 허브 **17번**에서 확인 |
+| `motion_page.py` | 허브 **3번 동작 티칭** 화면 (힘 빼기 → 지점 추가 → 저장 → ▶ 재생 → 잘 됨/안 됨 → ★ 이걸로 사용) |
+| `watch_page.py` | 허브 **1번 대기 자세 저장** 화면 (차가 오는 쪽을 바라보는 고정 자세 `watch` 를 절대 위치로 저장 · 확인. 카메라 필요 없음) |
+| `track_test.py` | 허브 **4번 차 추적 테스트** (받침만 돌려 차를 쫓아가는 것만 시험. 정지 신호 · 집기 없음. 방향 `track_pan_sign` 확인 · 저장) |
+| `yolo.py` | **YOLO 인식** (`models/arm_v1_yolo11n_320.onnx`, OpenCV 만 사용): 차 · 상자 · 포스트잇 · 공이 든 상자. 허브 **2번**에서 확인 |
 | `loading.py` | **상차 미션 본체**: 추적 → 정지 신호 → 계속 추적하며 완전 정차 확인(1.5초) → 색 → 집기 → 넣기 → 성공 확인 → 출발 신호 |
 | `load_link.py` | 차와 통신: `/arm/loading_status` (LoadingStatus) 발행, `/car/status` (CarStatus) 수신. `--no-ros` 면 화면 출력만 |
 
 준비 순서 (실물):
-1. 허브 3번: 대기 자세 `watch` (차가 오는 쪽을 바라보는 고정 자세)
-2. 허브 17번: 차를 기준 정차 위치에 세우고, 받침을 돌려 상자가 화면 가운데에 오게 한다
-3. 허브 16번 ⑤: "지금 받침 각도를 기준으로 저장"
-4. 허브 16번 ①: `빨간공_집기` · `파란공_집기` · `바구니_넣기` 를 각각 여러 회차 가르치고 ▶ 재생 → ★ 선택
+1. 허브 1번: 대기 자세 `watch` 저장 (차가 오는 쪽을 바라보는 고정 자세)
+2. 허브 2번: 차를 기준 정차 위치에 세우고, 받침을 돌려 상자가 화면 가운데에 오게 한다
+3. 허브 3번 ⑤: "지금 받침 각도를 기준으로 저장"
+4. 허브 3번 ①: `빨간공_집기` · `파란공_집기` · `바구니_넣기` 를 각각 여러 회차 가르치고 ▶ 재생 → ★ 선택
+   (먼저 허브 4번 **차 추적 테스트**로 차를 잘 쫓아가는지 · 받침 방향이 맞는지 확인하면 좋다)
    - `바구니_넣기` 의 마지막 지점은 **바구니 안이 카메라에 보이는 자세**로 끝낸다 (성공 확인을 그 자리에서 한다)
 5. `python -m mission.loading --check` → `--no-ros` → (Docker) 인자 없이
 
 ```bash
-python -m mission.hub --start motion             # 16번 화면 (Windows: 동작티칭_한방.cmd)
+python -m mission.hub --start motion             # 3번 화면 (Windows: 동작티칭_한방.cmd). 바로 열 화면: watchpose, yolo, motion, track, settings
 python -m mission.hub --start motion --fake-arm  # 팔 없이 화면만 눌러 보기
 python -m mission.loading --check                # 준비 확인 (팔 안 움직임)
 python -m mission.loading --no-ros --jobs 1      # 차 통신 없이 한 대만
-python -m unittest tests.test_mission_motions tests.test_mission_loading
+python -m unittest tests.test_mission_motions tests.test_mission_loading tests.test_mission_tracktest
 ```
 
 차 쪽과 맞출 내용 · 합의 문서와 다른 곳: `docs/mission/interface-draft.md`.

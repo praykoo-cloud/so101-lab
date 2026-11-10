@@ -17,9 +17,9 @@
   8) 대기 자세로 돌아가 차가 떠나면 다시 1)
 
 먼저 필요한 것 (--check 가 알려 준다)
-  허브 3번: 대기 자세 watch   ·   허브 16번: 빨간공_집기 / 파란공_집기 / 바구니_넣기 (★ 선택) + ⑤ 기준 차 위치
+  허브 1번: 대기 자세 저장   ·   허브 3번: 빨간공_집기 / 파란공_집기 / 바구니_넣기 (★ 선택) + ⑤ 기준 차 위치
 
-고칠 숫자: 허브 8번 설정의 'YOLO · 상차' 묶음 (정지 신호를 미리 내는 각도, 완전 정차 확인 시간 …)
+고칠 숫자: 허브 6번 설정의 'YOLO · 상차' 묶음 (정지 신호를 미리 내는 각도, 완전 정차 확인 시간 …)
 
 안전
 - 문제가 생기면(과열 · 통신 · 동작 없음) 차에게 FAILED 를 보내 출발시키고, 팔은 그 자리에서 멈춘다.
@@ -104,14 +104,14 @@ class Loader:
 
     # ── 준비 확인 ───────────────────────────────────────────────────────
     def problems(self) -> list[str]:
-        probs = list(self.arm.preflight([self.cfg.load_wait_pose]))
+        probs = [p.replace("(m0_teach_poses.py)", "(허브 1번 대기 자세 저장)") for p in self.arm.preflight([self.cfg.load_wait_pose])]
         for name in (*PICK_MOTION.values(), PLACE_MOTION):
             try:
                 self.book.chosen(name)
             except MotionError as e:
                 probs.append(str(e))
         if self.book.car_ref_pan() is None:
-            probs.append("'기준 차 위치' 가 저장되지 않았어요 (허브 16번 ⑤).")
+            probs.append("'기준 차 위치' 가 저장되지 않았어요 (허브 3번 ⑤).")
         return probs
 
     # ── 팔 (시험에서는 이 세 개만 바꿔 끼운다) ──────────────────────────
