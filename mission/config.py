@@ -134,7 +134,8 @@ class MissionConfig:
     load_verify_hits: int = 3                # 그동안 이만큼 넘게 보여야 성공
     load_retry_wait_seconds: float = 5.0     # 실패 후 다음 시도 전에 기다리는 시간 (떨어진 공을 사람이 제자리에 놓는 시간)
     load_leave_timeout: float = 30.0         # 결과를 알린 뒤 차가 떠나기를 기다리는 최대 시간
-    load_see_frames: int = 3                 # 차 + 상자가 연속 이만큼 보이면 바로 정지 신호 (한 장 잘못 본 것에 속지 않게)
+    load_see_frames: int = 2                 # 차 + 상자가 연속 이만큼 보이면 바로 정지 신호 (한 장 잘못 본 것에 속지 않게. 3 → 2: 반응 빠르게)
+    load_see_period: float = 0.05            # 차를 기다리는 동안 사진 사이에 쉬는 시간(초). 작을수록 정지 신호가 빠르다 (YOLO 한 번 ≈ 0.05초)
     load_use_tracking: bool = False          # 켜면 예전 방식 (받침을 돌려 차를 따라가다 기준 각도에서 정지 신호)
     load_wait_car_power: bool = True         # 상차 미션: 차의 첫 상태 메시지(차 전원 켜짐)를 받은 뒤 대기 자세로 간다
     # 바구니 넣기 (허브 4번 학습 · 실시간 맞추기)

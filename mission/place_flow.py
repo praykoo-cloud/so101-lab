@@ -58,6 +58,7 @@ class YoloEye:
         self.det_lock = det_lock or threading.Lock()
         self.last_frame = None
         self.last_dets: list = []
+        self.looked_at: float | None = None      # 마지막으로 YOLO 를 돌린 시각 (허브 카메라 창이 이 사진을 같이 쓴다)
         self._jpeg = None
 
     def look(self) -> Seen | None:
@@ -67,6 +68,7 @@ class YoloEye:
         with self.det_lock:
             dets = self.detector.detect(frame)
         self.last_frame, self.last_dets, self._jpeg = frame, dets, None
+        self.looked_at = time.monotonic()
         return Seen(dets, frame.shape[1])
 
     def jpeg(self) -> bytes | None:
@@ -193,7 +195,8 @@ class PlaceRunner:
                 elif now - still_since >= cfg.load_stop_confirm_seconds:
                     self.log("car_stopped", x=round(target.cx), y=round(target.cy))
                     return True
-            self.sleep(cfg.track_period)
+            # 차를 기다리는 동안은 짧게 쉬어 빨리 알아챈다. 정지 신호 뒤(정차 확인)는 원래 주기
+            self.sleep(cfg.load_see_period if stop_at is None else cfg.track_period)
 
     # ── 4) 색 · 공 집기 ─────────────────────────────────────────────────
     def read_color(self) -> str | None:

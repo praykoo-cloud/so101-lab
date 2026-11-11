@@ -146,6 +146,31 @@ class HubTest(unittest.TestCase):
         status, body = self.get("/img/live.jpg")
         self.assertEqual((status, body[:2]), (200, b"\xff\xd8"))                   # JPEG
 
+    def test_live_camera_reuses_place_yolo_while_place_is_running(self):
+        import time as _t
+
+        class Eye:
+            looked_at = _t.monotonic()
+
+            def jpeg(self):
+                return b"\xff\xd8place"
+
+        class Place:
+            eye = Eye()
+
+            def busy(self):
+                return True
+
+            def stop_and_join(self, timeout=None):
+                pass
+        self.hub.place = Place()
+        self.hub.ensure_camera = lambda: self.fail("no second YOLO while place runs")
+        status, body = self.get("/img/live.jpg")
+        self.assertEqual(body, b"\xff\xd8place")
+        Place.eye.looked_at = _t.monotonic() - 5                                   # 오래된 사진이면 쓰지 않는다
+        self.hub.live = (0.0, None)
+        self.assertIsNone(self.hub.place_jpeg())
+
     def open_place(self):
         from mission import place_learn
         root = Path(self.tmp.name)

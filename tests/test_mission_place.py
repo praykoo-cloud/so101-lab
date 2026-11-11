@@ -189,6 +189,15 @@ class RunnerTest(unittest.TestCase):
         self.assertTrue(self.runner.wait_car_and_stop())
         self.assertEqual(self.link.states(), ["STOP_REQUEST"])
 
+    def test_stop_signal_is_quick_while_waiting(self):
+        sleeps = []
+        self.runner.sleep = lambda dt: (sleeps.append(dt), self.clock.sleep(dt))
+        self.assertTrue(self.runner.wait_car_and_stop())
+        stop_index = self.cfg.load_see_frames
+        self.assertEqual(self.cfg.load_see_frames, 2)                            # 연속 2장이면 정지 신호
+        self.assertEqual(sleeps[:stop_index - 1], [self.cfg.load_see_period])     # 기다리는 동안은 짧게 (0.05초)
+        self.assertEqual(sleeps[stop_index - 1], self.cfg.track_period)           # 정지 신호 뒤(정차 확인)는 원래 주기
+
     def test_box_alone_is_not_enough(self):
         self.eye.car = False
         with self.assertRaises(TimeoutError):

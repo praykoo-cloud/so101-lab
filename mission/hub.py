@@ -133,7 +133,8 @@ SETTINGS = [
         ("load_offset_max_deg", "차 위치 보정 최대 각도(도)", "차가 기준 위치에서 이만큼 넘게 벗어나 서면 넣기를 하지 않아요 (안전)", "float", 1, 60),
         ("load_verify_seconds", "성공 확인 시간(초)", "넣은 뒤 '공이 든 상자' 를 이 시간 동안 찾아봐요", "float", 0.5, 20),
         ("load_retry_wait_seconds", "다음 시도 전 대기(초)", "실패한 뒤 다음 시도까지 기다려요 (떨어진 공을 제자리에 놓는 시간)", "float", 0, 120),
-        ("load_see_frames", "정지 신호 전 확인 장수", "차와 상자가 연속 이만큼 함께 보이면 바로 정지 신호 (한 장 잘못 본 것에 속지 않게)", "int", 1, 30),
+        ("load_see_frames", "정지 신호 전 확인 장수", "차와 상자가 연속 이만큼 함께 보이면 바로 정지 신호 (한 장 잘못 본 것에 속지 않게. 적을수록 빠름)", "int", 1, 30),
+        ("load_see_period", "차 기다릴 때 사진 간격(초)", "차를 기다리는 동안 사진 사이에 쉬는 시간. 작을수록 정지 신호가 빨라요 (YOLO 한 번 약 0.05초)", "float", 0, 1),
         ("load_wait_car_power", "차 전원 기다리기", "켜면 상차 미션이 차의 첫 상태 메시지(차 전원 켜짐)를 받은 뒤 대기 자세로 가요", "bool", None, None),
         ("load_use_tracking", "예전 추적 방식", "켜면 받침을 돌려 차를 따라가다 기준 각도에서 정지 신호를 내는 예전 방식 (4번 학습 대신 3번 바구니_넣기 동작을 써요)", "bool", None, None),
     ]),
@@ -408,12 +409,27 @@ class Hub:
         self.link = link
         return link
 
+    def place_jpeg(self, fresh: float = 1.0) -> bytes | None:
+        """4번 학습 · 테스트가 도는 중이고 그쪽 YOLO 사진이 fresh 초 안의 것이면 그 사진 (아니면 None)"""
+        place = self.place
+        if place is None or not place.busy():
+            return None
+        eye = getattr(place, "eye", None)
+        looked_at = getattr(eye, "looked_at", None)
+        if looked_at is None or time.monotonic() - looked_at > fresh:
+            return None
+        return eye.jpeg()
+
     def live_jpeg(self) -> tuple[bytes | None, str]:
         """모든 화면의 카메라 창: YOLO 가 찾은 것을 그린 지금 사진. (JPEG, 안 될 때 이유)"""
         import cv2
         drawn_at, jpeg = self.live
         if jpeg is not None and time.monotonic() - drawn_at < 0.4:          # 여러 탭이 동시에 불러도 0.4초에 한 번만 그린다
             return jpeg, ""
+        shared = self.place_jpeg()
+        if shared is not None:                                              # 4번이 돌고 있으면 그 YOLO 결과를 그대로 (YOLO 를 두 번 돌리지 않음)
+            self.live = (time.monotonic(), shared)
+            return shared, ""
         if self.camera is None and time.monotonic() - self.camera_failed_at < 10:
             return None, self.camera_problem                                # 실패하면 10초 쉬었다 다시 (화면이 멈추지 않게)
         problem = self.ensure_camera()
