@@ -184,13 +184,17 @@ class Loader:
             self.log("ERROR", reason=str(e))
             raise
         finally:
-            if not aborted:
-                try:
-                    self.go_wait()                                   # 9) 대기 자세로 돌아간 뒤
-                except Exception as e:
-                    self.log("warn", msg=f"대기 자세로 가지 못했어요: {e}")
-            self.link.set("SUCCESS" if result == "success" else "FAILED")     # 어떤 경우에도 결과를 알려 차를 출발시킨다
-            self.log("result", result=result, why=why)
+            home = False
+            try:
+                home = bool(self.go_wait())                          # 9) 대기 자세로 돌아간 뒤 (오류여도 한 번 시도)
+            except Exception as e:
+                self.log("warn", msg=f"대기 자세로 가지 못했어요: {e}")
+            if home or not self.link.hold:
+                self.link.set("SUCCESS" if result == "success" else "FAILED")   # 결과를 알려 차를 출발시킨다
+            else:
+                # 집게가 바구니 안에 있을 수 있다 → 차를 세워 둔 채로 둔다 (사람이 팔을 치우고 차 패널로 출발)
+                self.log("hold_car", msg="팔이 대기 자세로 못 돌아가서 차를 세워 둡니다. 팔을 치운 뒤 차를 직접 출발시키세요.")
+            self.log("result", result=result, why=why, aborted=aborted)
 
     # ── 팔 (시험에서는 이 세 개만 바꿔 끼운다) ──────────────────────────
     def play_motion(self, name: str, pan_offset: float = 0.0) -> dict:

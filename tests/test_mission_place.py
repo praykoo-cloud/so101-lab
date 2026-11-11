@@ -343,13 +343,26 @@ class SessionTest(unittest.TestCase):
         self.assertEqual([t["use"] for t in takes], [False, True])         # 실패 회차는 기록만
         self.assertEqual(self.link.states()[-1], "SUCCESS")
 
-    def test_stop_while_teaching_releases_the_car(self):
+    def test_stop_while_teaching_keeps_the_car_until_person_releases(self):
         self.s.start("learn", self.sid, self.link)
         self.wait_for("teach5")
+        self.assertEqual(self.link.pauses, [True])                        # 정지 신호 = /arm/pause True
         self.s.handle("stop", {})
         self.s._thread.join(5)
+        self.assertEqual(self.link.states()[-1], "IN_PROGRESS")           # 집게가 바구니에 있을 수 있어 차는 그대로
+        self.assertEqual(self.link.pauses, [True])
+        self.assertIn("차 출발시키기", self.s.status["message"])
+        self.assertIn("FAILED", self.s.handle("car-go", {}))              # 사람이 확인하고 출발
         self.assertEqual(self.link.states()[-1], "FAILED")
-        self.assertIn("정지", self.s.status["message"])
+        self.assertEqual(self.link.pauses, [True, False])
+        with self.assertRaises(PlaceError):
+            self.s.handle("car-go", {})                                    # 두 번은 안 됨
+
+    def test_success_pauses_then_releases_the_car(self):
+        self.s.start("learn", self.sid, self.link)
+        self.teach_one()
+        self.s._thread.join(5)
+        self.assertEqual(self.link.pauses, [True, False])
 
     def test_test_mode_from_step_5_uses_the_learned_mean(self):
         self.book.add_take(self.sid, steps(pan=10.0, cx=320.0), {}, success=True)

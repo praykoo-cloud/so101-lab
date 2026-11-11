@@ -405,6 +405,21 @@ class NewFlowTest(unittest.TestCase):
         self.assertNotIn("TRACKING", self.link.states())                      # 따라가지 않고 보이면 바로 정지
         self.assertEqual(self.world.loaded, "red")
         self.assertEqual(self.arm.went[-1], "watch")                          # 대기 자세로 돌아간 뒤 출발 신호
+        self.assertEqual(self.link.pauses, [True, False])                     # 차 코드는 /arm/pause 로 선다 · 간다
+
+    def test_error_away_from_wait_pose_keeps_the_car_stopped(self):
+        loader = self.build(note="red")
+        from mission.place_flow import FlowAbort
+
+        def broken(*a, **k):
+            self.arm.go = lambda name, **kw: False                             # 이제부터 대기 자세로 못 돌아감
+            raise FlowAbort("모터 통신 끊김")
+        self.ops.play_pick = broken
+        with self.assertRaises(LoadAbort):
+            loader.run(max_jobs=1)
+        self.assertEqual(self.link.states()[-1], "IN_PROGRESS")
+        self.assertEqual(self.link.pauses, [True])                            # 차는 서 있는 채로
+        self.assertIn("hold_car", self.names())
 
     def test_failure_waits_for_the_ball_then_picks_again(self):
         loader = self.build(note="blue")
@@ -443,6 +458,28 @@ class NewFlowTest(unittest.TestCase):
             loader.run(max_jobs=1)
         self.assertIn("4번", str(ctx.exception))
         self.assertFalse(self.arm.torque)
+
+
+class PauseTest(unittest.TestCase):
+    """/arm/pause: 세우는 동안 True 를 1초마다, 풀면 False 를 3번만 (사람이 세운 차를 멋대로 출발시키지 않게)"""
+
+    def test_pause_follows_hold_states(self):
+        sent = []
+        link = FakeLoadLink()
+        link._publish_pause = sent.append
+        link.set("WAITING")
+        self.assertEqual(sent, [])                                             # 처음에는 아무것도 안 보냄
+        link.set("STOP_REQUEST")
+        link.set("IN_PROGRESS", "red", 1)
+        link._pause_tick()
+        self.assertEqual(sent, [True, True, True])                             # 세우는 동안은 계속 True
+        link.set("SUCCESS")
+        for _ in range(6):
+            link._pause_tick()
+        self.assertEqual(sent[3:], [False, False, False])                      # 출발은 3번만
+        link.set("WAITING")
+        link._pause_tick()
+        self.assertEqual(len(sent), 6)
 
 
 class InterfaceTest(unittest.TestCase):

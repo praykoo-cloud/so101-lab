@@ -13,7 +13,8 @@
 
 안전
 - 5 · 6 · 8 에서는 팔(1~5번)만 힘을 뺀다. 집게(6번)는 힘을 유지해서 쥔 공이 떨어지지 않는다. 팔을 손으로 받칠 것!
-- '정지' 는 지금 동작이 끝나면 멈추고 팔은 그 자리에서 힘을 준다. 정지 신호를 낸 뒤 멈추면 차에게 FAILED(출발)를 보낸다.
+- '정지' 는 지금 동작이 끝나면 멈추고 팔은 그 자리에서 힘을 준다. 차를 세워 둔 뒤 멈추거나 오류가 나면 차는 **그대로 서 있는다**
+  (집게가 바구니 안에 있을 수 있으므로). 팔을 치운 뒤 [차 출발시키기] 를 누르면 FAILED + 일시정지 해제를 보낸다.
 """
 from __future__ import annotations
 
@@ -159,11 +160,24 @@ class PlaceSession:
         except Exception:
             pass
         sent = ""
-        if self.link is not None and self.link.snapshot()["state"] in ("STOP_REQUEST", "IN_PROGRESS"):
-            self.link.set("FAILED")                  # 차가 계속 서 있지 않게 출발시킨다
-            sent = " 차에게 FAILED(출발)를 보냈어요."
+        if self.car_held():
+            # 집게가 바구니 안에 있을 수 있으니 차를 자동으로 출발시키지 않는다. 사람이 팔을 치운 뒤 [차 출발시키기]
+            sent = " 차는 그대로 세워 뒀어요. 팔(집게)을 바구니에서 치운 뒤 [차 출발시키기] 를 누르세요."
         self.status["arm_torque"] = True
         self._say(None, message + sent, error)
+
+    def car_held(self) -> bool:
+        """팔이 차를 세워 두고 있는가 (STOP_REQUEST · IN_PROGRESS)"""
+        return self.link is not None and self.link.snapshot()["state"] in ("STOP_REQUEST", "IN_PROGRESS")
+
+    def car_go(self) -> str:
+        """정지 · 오류 뒤 사람이 확인하고 차를 출발시킨다 (FAILED = 공 없이 출발, /arm/pause False)"""
+        self._need_idle()
+        if not self.car_held():
+            raise PlaceError("지금 팔이 차를 세워 두고 있지 않아요.")
+        self.link.set("FAILED")
+        self.log("car_go", by="사람")
+        return "차에게 FAILED(공 없이 출발)와 일시정지 해제를 보냈어요."
 
     def _go_wait(self, runner: PlaceRunner):
         runner.check()
@@ -386,6 +400,8 @@ class PlaceSession:
         if action == "continue":
             self._answer("continue")
             return "계속해요."
+        if action == "car-go":
+            return self.car_go()
         if action == "stop":
             if not self.busy():
                 raise PlaceError("지금 진행 중이 아니에요.")
@@ -482,7 +498,8 @@ def place_body() -> str:
   <p class=small id=settext></p>
   <p><label><input type=checkbox id=noros> 차 통신 없이 (신호를 화면에만 표시. ROS2 가 없을 때 연습용)</label></p>
   <h2>학습</h2>
-  <p><button id=learn>▶ 학습 시작</button> <button id=stop style="background:#b3261e;border-color:#b3261e">■ 정지</button></p>
+  <p><button id=learn>▶ 학습 시작</button> <button id=stop style="background:#b3261e;border-color:#b3261e">■ 정지</button>
+     <button id=cargo class=sec hidden>차 출발시키기 (공 없이)</button></p>
   <div id=teach class=msg hidden>
    <p><button data-save=5>5 저장</button> <button data-save=6>6 저장</button> <button data-save=7>7 저장</button> <button data-save=8>8 저장</button></p>
    <p><button class=sec id=armoff>팔 힘 빼기</button> <button class=sec id=armon>팔 고정 (힘 주기)</button>
@@ -543,6 +560,7 @@ function render(d){S=d;const b=d.book;const sel=$('set');const keep=sel.value;
  $('teach').hidden=!w.startsWith('teach');
  document.querySelectorAll('[data-save]').forEach(x=>x.disabled=w!=='teach'+x.dataset.save);
  $('nextbox').hidden=w!=='next';$('judge').textContent=d.judged===null?'':'YOLO 판정: '+(d.judged?'성공 (공이 든 바구니 보임)':'실패 (안 보임)');
+ $('cargo').hidden=run||!(d.link&&(d.link.arm==='STOP_REQUEST'||d.link.arm==='IN_PROGRESS'));
  $('ball').hidden=w!=='ball';$('cont').hidden=w!=='continue';
  $('torquetext').textContent=d.arm_torque===false?'지금: 팔 힘 빠짐 (손으로 받치세요)':d.arm_torque?'지금: 팔 고정됨':'';
  $('griptext').textContent=d.grip==null?'-':d.grip+'%';if(d.grip!=null&&document.activeElement!==$('grip'))$('grip').value=d.grip;
@@ -574,6 +592,7 @@ $('learn').onclick=()=>{if(confirm('팔이 대기 자세로 움직이고, 차가
 $('test').onclick=()=>{const f=+$('from').value;if(f>=5&&!confirm('지금 팔이 '+($('color').value==='red'?'빨간':'파란')+' 공을 쥐고 있나요?'))return;
  if(confirm(f+'단계부터 자동으로 움직여요. 주변을 비웠나요?'))post('test',{sid:sid(),start:f,color:$('color').value,pause:$('pause').checked,no_ros:$('noros').checked})};
 $('stop').onclick=()=>post('stop');
+$('cargo').onclick=()=>{if(confirm('팔(집게)이 바구니에서 완전히 빠져 있나요? 차가 공 없이 출발해요.'))post('car-go')};
 document.querySelectorAll('[data-save]').forEach(x=>x.onclick=()=>post('save',{step:+x.dataset.save}));
 $('armoff').onclick=()=>{if(confirm('팔(1~5번) 힘을 뺄까요? 손으로 받치세요. 집게는 그대로 공을 쥐고 있어요.'))post('arm-torque',{on:false})};
 $('armon').onclick=()=>post('arm-torque',{on:true});
