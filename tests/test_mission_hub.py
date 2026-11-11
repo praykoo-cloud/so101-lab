@@ -103,6 +103,7 @@ class HubTest(unittest.TestCase):
             self.assertIn(group, text)
         for cls in ("num g-prep", "num g-test", "num g-run", "num g-set"):    # 묶음마다 번호 색이 다르다
             self.assertIn(cls, text)
+        self.assertIn(".card .num{color:#fff", text)                          # 카드 설명 글자색이 번호의 흰색을 덮지 않게 (번호가 안 보이던 결함)
         for old_title in ("구역 설정", "색상 등록", "기준색 잠금", "집기 연습 · 학습", "자동차 모양 등록", "작업 기록"):
             self.assertNotIn(old_title, text)
         for word in ("가상", "가짜", "PRACTICE", "연습용", "fake"):
