@@ -64,17 +64,17 @@ OLD_CATEGORIES = [                       # 예전 1~18번 (첫 화면에서는 �
 ]
 MODE_NAMES = {"view", "pose", "roi", "color", "verify", "arrival", "car"}
 PAGE_NAMES = {"doctor", "lock", "settings", "run9", "run10", "store", "photos", "practice", "motion", "yolo", "run18",
-              "watchpose", "track"}
+              "watchpose", "place"}
 
 # 첫 화면에 보이는 새 메뉴. 번호 색은 묶음마다 다르다 (준비 = 주황, 테스트 = 초록, 실행 = 보라, 설정 = 회색)
-GROUPS = {"prep": ("준비", "처음에 한 번씩 해 두는 것"), "test": ("테스트", "팔을 움직여 보며 확인"),
+GROUPS = {"prep": ("준비", "처음에 한 번씩 해 두는 것"), "test": ("학습 · 테스트", "실제 순서대로 팔을 움직이며 가르치고 확인"),
           "run": ("실행", "경기 방식으로 돌리기"), "set": ("설정", "숫자 고치기")}
 CATEGORIES = [
     (1, "대기 자세 저장", "차가 오는 쪽을 바라보는 고정 자세를 절대 위치로 저장하고 확인 (팔만 연결하면 됨, 카메라 필요 없음)", "page", "watchpose", "prep"),
     (2, "카메라 · YOLO 확인", "손목 카메라에 차 · 상자 · 포스트잇 · 공이 든 상자가 어떻게 잡히는지 네모로 확인 (팔 안 움직임)", "page", "yolo", "prep"),
     (3, "동작 티칭", "팔을 손으로 움직여 동작(자세 여러 개)을 가르치고 회차별로 저장 · 재생 · 선택 (빨간공 집기, 파란공 집기, 바구니 넣기)", "page", "motion", "prep"),
-    (4, "차 추적 테스트", "차를 쫓아가는 것만 시험: 받침만 돌려 차(상자)를 화면 가운데에 두기. 정지 신호 · 집기는 하지 않음", "page", "track", "test"),
-    (5, "상차 미션 실행", "차 추적 → 정지 신호 → 완전 정차 확인 → 집기 · 넣기 → 출발 신호 (터미널에서 실행)", "page", "run18", "run"),
+    (4, "바구니 넣기 학습", "실제 상차 순서대로 돌리며 바구니 위 · 안 · 집게 해제 · 성공 확인 자세를 여러 번 가르치고(YOLO 사진 + 모터 값), 고른 단계부터 테스트", "page", "place", "test"),
+    (5, "상차 미션 실행", "차 + 상자가 보이면 정지 신호 → 공 집기 → 바구니 넣기(4번 학습) → 성공 확인 → 출발 신호 (터미널에서 실행)", "page", "run18", "run"),
     (6, "설정 값", "추적 · YOLO · 상차 숫자와 카메라 번호 · 팔 포트를 보고 직접 수정", "page", "settings", "set"),
 ]
 
@@ -133,11 +133,21 @@ SETTINGS = [
         ("load_offset_max_deg", "차 위치 보정 최대 각도(도)", "차가 기준 위치에서 이만큼 넘게 벗어나 서면 넣기를 하지 않아요 (안전)", "float", 1, 60),
         ("load_verify_seconds", "성공 확인 시간(초)", "넣은 뒤 '공이 든 상자' 를 이 시간 동안 찾아봐요", "float", 0.5, 20),
         ("load_retry_wait_seconds", "다음 시도 전 대기(초)", "실패한 뒤 다음 시도까지 기다려요 (떨어진 공을 제자리에 놓는 시간)", "float", 0, 120),
+        ("load_see_frames", "정지 신호 전 확인 장수", "차와 상자가 연속 이만큼 함께 보이면 바로 정지 신호 (한 장 잘못 본 것에 속지 않게)", "int", 1, 30),
+        ("load_wait_car_power", "차 전원 기다리기", "켜면 상차 미션이 차의 첫 상태 메시지(차 전원 켜짐)를 받은 뒤 대기 자세로 가요", "bool", None, None),
+        ("load_use_tracking", "예전 추적 방식", "켜면 받침을 돌려 차를 따라가다 기준 각도에서 정지 신호를 내는 예전 방식 (4번 학습 대신 3번 바구니_넣기 동작을 써요)", "bool", None, None),
+    ]),
+    ("바구니 넣기 (4번 학습 · 실시간 맞추기)", [
+        ("place_servo_gain_deg_per_px", "맞추는 세기(도/픽셀)", "바구니가 학습 자리에서 1픽셀 벗어날 때 돌릴 각도. 작을수록 부드럽고 느려요", "float", 0.002, 0.5),
+        ("place_servo_deadband_px", "맞춘 것으로 보는 폭(픽셀)", "학습 때 바구니 자리에서 이 안이면 '맞췄다'", "float", 1, 200),
+        ("place_servo_max_deg", "최대 보정 각도(도)", "학습한 자세에서 관절마다 이만큼까지만 더 움직여요. 넘으면 그 시도는 실패 (안전)", "float", 1, 60),
+        ("place_servo_seconds", "맞추기 제한 시간(초)", "이 시간 안에 못 맞추면 그 시도는 실패", "float", 1, 60),
+        ("place_servo_tilt_sign", "세로 맞추기 (어깨 2번)", "0 = 안 함 (받침으로 가로만 맞춤). 1 / -1 = 어깨로 세로도 맞추기 (반대로 움직이면 부호를 바꾸세요)", "tri", -1, 1),
+        ("track_pan_sign", "가로 맞추기 방향 (+1 / -1)", "받침을 + 로 돌렸을 때 바구니가 화면 왼쪽으로 가면 1, 오른쪽으로 가면 -1. 반대로 움직여 실패하면 바꾸세요", "sign", -1, 1),
     ]),
     ("차 추적", [
         ("tracking_enabled", "차 추적 사용", "켜면 추적 시작 자세(watch)에서 차를 쫓아가 정차하면 포스트잇 대기 자세(wait)로 옮겨요. 끄면 예전처럼 wait 자세 한 곳에서만 기다려요. "
                              "켜기 전에 3번에서 watch 자세, 4번에서 추적 도로 구역 + 빈 도로 기준 사진이 필요해요", "bool", None, None),
-        ("track_pan_sign", "추적 방향 (+1 / -1)", "받침을 + 로 돌렸을 때 차가 가운데로 오면 1, 멀어지면 -1. 3번의 ‘추적 방향 확인’이 정지한 차로 재서 채워 줘요", "sign", -1, 1),
         ("track_pan_limit_deg", "좌우 한계(도)", "추적 시작 자세에서 받침을 좌우로 이만큼까지만 돌려요 (안전)", "float", 1, 60),
         ("track_gain_deg_per_px", "돌리는 세기(도/픽셀)", "차가 가운데에서 1픽셀 벗어날 때 돌릴 각도. 작을수록 부드럽고 느려요", "float", 0.005, 0.5),
         ("track_deadband_px", "가운데 허용 폭(픽셀)", "차가 가운데에서 이 안이면 안 돌려요 (떨림 방지)", "float", 0, 200),
@@ -185,10 +195,25 @@ h2.grp.g-prep{color:#c2410c}h2.grp.g-test{color:#15803d}h2.grp.g-run{color:#6d28
 """
 
 
-def page(title: str, body: str, script: str = "") -> bytes:
+# 모든 화면 오른쪽 아래의 작은 카메라 창 (YOLO 인식). 누르면 크게 / 작게
+LIVE_CAM = """<div id=livecam class=livecam title='누르면 크게 / 작게'><img id=liveimg hidden alt='손목 카메라 YOLO 인식 화면'><div id=livetext class=small>카메라 준비 중…</div></div>
+<script>(()=>{const box=document.getElementById('livecam'),img=document.getElementById('liveimg'),txt=document.getElementById('livetext');let busy=false,url=null;
+box.onclick=()=>box.classList.toggle('big');
+async function tick(){if(busy||document.hidden)return;busy=true;try{const r=await fetch('/img/live.jpg?t='+Date.now(),{cache:'no-store'});
+if(r.ok){const b=await r.blob();if(url)URL.revokeObjectURL(url);url=URL.createObjectURL(b);img.src=url;img.hidden=false;txt.textContent='YOLO 인식 카메라 (누르면 크게)'}
+else{img.hidden=true;txt.textContent='카메라 없음: '+(await r.text()||'영상이 안 들어와요')}}catch(e){txt.textContent='허브와 연결이 끊겼어요.'}busy=false}
+tick();setInterval(tick,700)})()</script>"""
+LIVE_CSS = (".livecam{position:fixed;right:12px;bottom:12px;width:240px;background:#fff;border:1px solid var(--line);border-radius:10px;"
+            "padding:6px;box-shadow:0 4px 14px rgba(0,0,0,.15);cursor:zoom-in;z-index:50}"
+            ".livecam img{width:100%;border-radius:6px;display:block}.livecam.big{width:min(720px,94vw);cursor:zoom-out}"
+            "@media (max-width:600px){.livecam{width:150px}}")
+
+
+def page(title: str, body: str, script: str = "", camera: bool = True) -> bytes:
+    cam = LIVE_CAM if camera else ""
     return (f"<!doctype html><html lang=ko><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
-            f"<title>{esc(title)} · 배달 한방</title><style>{CSS}</style></head><body><main>"
-            f"<nav class=top><a href='/hub'>← 배달 한방 허브</a></nav>{body}</main>{script}</body></html>").encode()
+            f"<title>{esc(title)} · 배달 한방</title><style>{CSS}{LIVE_CSS}</style></head><body><main>"
+            f"<nav class=top><a href='/hub'>← 배달 한방 허브</a></nav>{body}</main>{cam}{script}</body></html>").encode()
 
 
 def fmt_time(path: Path) -> str:
@@ -218,7 +243,12 @@ class Hub:
         self.detector = None                   # 17번 YOLO (처음 열 때 모델을 읽는다)
         self.yolo_jpeg = None                  # 2번: 마지막으로 그린 사진
         self.watch_desk = None                 # 1번 대기 자세 저장
-        self.track = None                      # 4번 차 추적 테스트 (실행 중이면 팔 · 카메라를 혼자 쓴다)
+        self.place = None                      # 4번 바구니 넣기 학습 (학습 · 테스트 중이면 팔을 혼자 쓴다)
+        self.link = None                       # 차와의 통신 (4번에서 처음 쓸 때 연다. ROS2 는 Docker 안에서만)
+        self.det_lock = threading.Lock()       # YOLO 는 한 번에 한 스레드만 (카메라 창 + 4번 학습)
+        self.live = (0.0, None)                # 카메라 창: (그린 시각, JPEG)
+        self.camera_failed_at = 0.0            # 카메라 열기에 실패한 시각 (실패하면 잠깐 쉬었다 다시 시도)
+        self.camera_problem = ""
         self.resources = ExitStack()
         self.lock = threading.RLock()          # 요청은 동시에 받되, 화면 상태를 바꾸는 일은 한 번에 하나씩
 
@@ -288,8 +318,8 @@ class Hub:
     def motion_busy(self) -> bool:
         return self.motion_desk is not None and self.motion_desk.busy()
 
-    def track_running(self) -> bool:
-        return self.track is not None and self.track.running()
+    def place_busy(self) -> bool:
+        return self.place is not None and self.place.busy()
 
     def arm_in_use(self, ignore: str = "") -> str | None:
         """다른 화면이 팔을 움직이는 중이면 이유 문장 (없으면 None). ignore = 지금 여는 화면 자신"""
@@ -297,8 +327,8 @@ class Hub:
             return "집기 연습이 팔을 쓰는 중이에요. 집기 연습 화면에서 정지한 뒤 다시 하세요."
         if ignore != "motion" and self.motion_busy():
             return "동작 티칭(3번)이 팔을 움직이는 중이에요. 3번 화면에서 정지한 뒤 다시 하세요."
-        if ignore != "track" and self.track_running():
-            return "차 추적 테스트(4번)가 팔을 움직이는 중이에요. 4번 화면에서 정지한 뒤 다시 하세요."
+        if ignore != "place" and self.place_busy():
+            return "바구니 넣기 학습(4번)이 진행 중이에요. 4번 화면에서 끝내거나 정지한 뒤 다시 하세요."
         if ignore != "watch" and self.watch_desk is not None and self.watch_desk.busy():
             return "팔이 대기 자세로 가는 중이에요. 끝난 뒤에 다시 하세요."
         return None
@@ -331,28 +361,81 @@ class Hub:
             raise ValueError(f"YOLO 모델을 읽지 못했어요: {error}") from error
         return self.detector
 
-    def start_track(self, data: dict) -> str:
-        """4번: 차 추적만 시작 (받침만 돌림. 신호 · 집기 없음). 문제가 있으면 ValueError 로 이유를 말한다"""
-        from .arm_io import ArmIO
-        from .track_test import SnapEye, TrackTest
-        if self.track_running():
-            raise ValueError("이미 추적 중이에요.")
-        reason = self.arm_in_use(ignore="track")
+    def open_place(self) -> str | None:
+        """4번: 바구니 넣기 학습 책상 준비 (팔 + 카메라 + YOLO). 문제가 있으면 안내 문장"""
+        reason = self.arm_in_use(ignore="place")
         if reason:
-            raise ValueError(reason)
-        self.leave()
-        problem = self.ensure_camera() or self.ensure_arm()
+            return reason
+        problem = self.ensure_arm() or self.ensure_camera()
         if problem:
-            raise ValueError(problem)
-        detector = self.get_detector()
-        cfg = self.cfg()
-        sign = data.get("sign")
-        if sign not in (1, -1):
-            sign = cfg.track_pan_sign
-        self.track = TrackTest(cfg, ArmIO(self.arm, cfg), SnapEye(self.camera, detector), sign=sign,
-                               go_start=data.get("go_start") is True)
-        self.track.start()
-        return "추적을 시작했어요. 차(상자)를 카메라에 보여 주세요. 멈추려면 ‘정지’."
+            return problem
+        try:
+            detector = self.get_detector()
+        except ValueError as error:
+            return str(error)
+        if self.place is not None and self.place.robot is self.arm and self.place.busy():
+            return None
+        from .motions import MotionBook, MotionError
+        from .place_flow import YoloEye
+        from .place_learn import PlaceError
+        from .place_page import PlaceSession
+
+        def read_frame():
+            sample = self.camera.snapshot() if self.camera is not None else None
+            time.sleep(0.03)                           # 같은 사진을 너무 빨리 반복해 읽지 않게
+            return None if sample is None else sample[1]
+        try:
+            self.place = PlaceSession(self.arm, self.cfg(), YoloEye(read_frame, detector, self.det_lock), MotionBook())
+        except (MotionError, PlaceError) as error:
+            return str(error)
+        return None
+
+    def place_link(self, no_ros: bool):
+        """차와의 통신. no_ros = 신호를 화면에만 (연습). 진짜는 Docker 안의 ROS2 (한 번 열면 허브가 꺼질 때까지 쓴다)"""
+        from .load_link import FakeLoadLink, RosLoadLink
+        if no_ros:
+            if self.link is None or isinstance(self.link, FakeLoadLink):
+                self.link = FakeLoadLink(echo=True)
+            return self.link
+        if self.link is not None and not isinstance(self.link, FakeLoadLink):
+            return self.link
+        try:
+            link = RosLoadLink(self.cfg().state_hz)
+        except Exception as error:                     # rclpy · common_interfaces 가 없음 (Docker 밖)
+            raise ValueError(f"ROS2 를 시작하지 못했어요 ({error}). Pi 에서 ./허브_도커.sh 로 허브를 Docker 안에서 켜거나, "
+                             "연습이면 '차 통신 없이' 를 체크하세요.") from None
+        link.start()
+        self.link = link
+        return link
+
+    def live_jpeg(self) -> tuple[bytes | None, str]:
+        """모든 화면의 카메라 창: YOLO 가 찾은 것을 그린 지금 사진. (JPEG, 안 될 때 이유)"""
+        import cv2
+        drawn_at, jpeg = self.live
+        if jpeg is not None and time.monotonic() - drawn_at < 0.4:          # 여러 탭이 동시에 불러도 0.4초에 한 번만 그린다
+            return jpeg, ""
+        if self.camera is None and time.monotonic() - self.camera_failed_at < 10:
+            return None, self.camera_problem                                # 실패하면 10초 쉬었다 다시 (화면이 멈추지 않게)
+        problem = self.ensure_camera()
+        if problem:
+            self.camera_failed_at, self.camera_problem = time.monotonic(), problem
+            return None, problem
+        sample = self.camera.snapshot()
+        if sample is None:
+            return None, "카메라 영상이 끊겼어요."
+        frame = sample[1]
+        try:
+            from .yolo import draw
+            detector = self.get_detector()
+            with self.det_lock:
+                found = detector.detect(frame)
+            frame = draw(frame, found)
+        except ValueError:
+            pass                                                            # 모델이 없으면 그냥 사진만
+        ok, buf = cv2.imencode(".jpg", frame)
+        jpeg = buf.tobytes() if ok else None
+        self.live = (time.monotonic(), jpeg)
+        return jpeg, "" if jpeg else "사진을 만들지 못했어요."
 
     def open_motion(self) -> str | None:
         """16번: 동작 티칭 책상 준비 (팔 연결). 문제가 있으면 안내 문장"""
@@ -390,7 +473,8 @@ class Hub:
             return {"ok": False, "message": "카메라 영상이 끊겼어요.", "found": []}
         frame = sample[1]
         started = time.monotonic()
-        found = self.detector.detect(frame)
+        with self.det_lock:
+            found = self.detector.detect(frame)
         took = time.monotonic() - started
         ok, buf = cv2.imencode(".jpg", draw(frame, found))
         self.yolo_jpeg = buf.tobytes() if ok else None
@@ -438,14 +522,15 @@ class Hub:
         if self.motion_busy():                          # 재생 중이면 멈춘 뒤 닫는다 (팔은 그 자리에서 힘을 준 채 선다)
             self.motion_desk.stop()
             self.motion_desk.join(20)
-        if self.track_running():                        # 추적 중이면 멈춘 뒤 닫는다
-            self.track.stop()
-            self.track.join(10)
+        if self.place is not None:                      # 4번 학습 · 테스트 중이면 멈춘 뒤 닫는다
+            self.place.stop_and_join(20)
         if self.watch_desk is not None and self.watch_desk.busy():
             self.watch_desk.join(20)
         self.leave()
         if self.camera is not None:
             self.camera.close()
+        if self.link is not None:
+            self.link.stop()
         if self.arm is not None:
             self.arm.close()
 
@@ -464,7 +549,7 @@ def home_page(hub: Hub, message: str = "") -> bytes:
         if cards:
             sections.append(f"<h2 class='grp g-{key}'>{esc(name)} <small>{esc(hint)}</small></h2><div class=grid>{''.join(cards)}</div>")
     msg = f"<p class='msg bad' role=alert>{esc(message)}</p>" if message else ""
-    body = (f"<h1>배달 한방</h1><p class=sub>경기 전 준비 화면입니다. 번호 순서대로 하세요: 준비(1~3) → 테스트(4) → 실행(5). 모두 실제 카메라 · 실제 팔로만 동작합니다.</p>"
+    body = (f"<h1>배달 한방</h1><p class=sub>경기 전 준비 화면입니다. 번호 순서대로 하세요: 준비(1~3) → 학습 · 테스트(4) → 실행(5). 모두 실제 카메라 · 실제 팔로만 동작합니다.</p>"
             f"{msg}{''.join(sections)}"
             f"<p class=small>저장된 값은 6번에서 언제든 고칠 수 있어요. 경기 중에는 이 화면 · SSH를 쓰지 않습니다.</p>"
             f"<p><button class=sec id=quit>허브 끝내기</button></p>")
@@ -878,70 +963,9 @@ def watch_page(hub: Hub) -> bytes:
     return page("대기 자세 저장", watch_body(), watch_script(hub.token))
 
 
-TRACK_BODY = """
-<h1><span class="num g-test">4</span>차 추적 테스트</h1>
-<p class=sub>차를 쫓아가는 것만 시험합니다. 팔은 <b>받침(1번 모터)만</b> 좌우로 돌려 차(상자)를 화면 가운데에 두려고 해요.
-<b>차에게 정지 · 출발 신호를 보내지 않고, 집기도 하지 않습니다.</b></p>
-<p class=msg id=out role=status aria-live=polite>시작 전이에요.</p>
-<div class=msg>
-  <p><button id=start>▶ 추적 시작</button> <button id=stop class=sec disabled>■ 정지</button></p>
-  <p><label><input type=checkbox id=gostart> 시작할 때 대기 자세로 먼저 이동</label>
-     <span class=small>(체크하지 않으면 지금 자리에서 시작. 체크하면 팔이 움직이니 주변을 비우세요)</span></p>
-  <p><label><input type=checkbox id=flip> 받침 방향 반대로 (‘방향 뒤집기’)</label>
-     <button id=savesign class=sec>이 방향을 설정에 저장</button>
-     <span class=small id=signtext></span></p>
-  <p class=small>정지하면 팔은 그 자리에서 힘을 준 채 서 있어요. 대기 자세로 되돌리려면 <a href='/p/watchpose'>1번 대기 자세 저장</a>의 ‘대기 자세로 가기’를 쓰세요.
-  급하면 팔 전원 스위치를 끄세요.</p>
-</div>
-<p class='msg warn' id=hint hidden></p>
-<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;align-items:start">
-  <div><img id=shot alt='차(상자)를 찾은 곳을 네모로 그린 카메라 사진. 초록 세로선이 화면 가운데' style='max-width:100%;border:1px solid var(--line);border-radius:8px;min-height:120px'>
-  <p class=small>초록 세로선 = 화면 가운데, 하늘색 두 선 = 가운데 허용 폭 (이 안이면 안 돌려요)</p></div>
-  <table><tbody id=rows></tbody></table>
-</div>
-"""
-
-TRACK_SCRIPT = """
-<script>
-const TOKEN='__TOKEN__';const $=id=>document.getElementById(id);let last=null,busyShot=false;
-async function post(action,data){
-  const r=await fetch('/api/track/'+action,{method:'POST',headers:{'Content-Type':'application/json','X-Hub-Token':TOKEN},body:JSON.stringify(data||{})});
-  const d=await r.json().catch(()=>({message:'응답을 읽지 못했어요.'}));
-  const o=$('out');o.textContent=d.message;o.className='msg '+(r.ok?'ok':'bad');return r.ok}
-const STATE={idle:'대기',starting:'준비 중',running:'추적 중',done:'멈춤',error:'문제 발생'};
-function row(a,b){return '<tr><th>'+a+'</th><td>'+b+'</td></tr>'}
-function render(d){
-  const active=d.state==='starting'||d.state==='running';
-  $('start').disabled=active;$('stop').disabled=!active;$('gostart').disabled=active;$('flip').disabled=active;
-  if(!active&&last===null)$('flip').checked=d.sign<0;
-  $('signtext').textContent='지금 설정: '+(d.sign<0?'-1 (반대)':'+1 (기본)');
-  if(d.message&&(active||d.state==='done'||d.state==='error')){$('out').textContent=STATE[d.state]+' · '+d.message;$('out').className='msg '+(d.state==='error'?'bad':'')}
-  const h=$('hint');h.hidden=!d.hint;h.textContent=d.hint||'';
-  const off=d.error_px==null?'-':(d.error_px>0?'오른쪽 ':'왼쪽 ')+Math.abs(d.error_px)+'픽셀'+(d.centered?' (가운데!)':'');
-  $('rows').innerHTML=row('상태',STATE[d.state]||d.state)
-    +row('찾은 것',d.found?d.label+' <span class=small>확신 '+d.conf+'</span>':'<span class=warn>안 보여요</span>')
-    +row('가운데에서 벗어남',off)
-    +row('받침이 처음에서',d.pan_from_center==null?'-':(d.pan_from_center>0?'+':'')+d.pan_from_center+'도 (한계 ±'+d.limit+'도'+(d.at_limit?', 닿음':'')+')')
-    +row('받침 방향',d.sign<0?'-1 (반대)':'+1 (기본)')
-    +row('놓친 횟수',d.lost_events)
-    +row('평균 벗어남',d.mean_abs_error_px==null?'-':d.mean_abs_error_px+'픽셀')
-    +row('찾은 사진 / 전체',d.found_frames+' / '+d.frames);
-  if((active||d.frames>0)&&!busyShot){busyShot=true;const img=new Image();img.onload=()=>{$('shot').src=img.src;busyShot=false};img.onerror=()=>{busyShot=false};img.src='/img/track.jpg?t='+Date.now()}
-  last=d}
-async function tick(){try{render(await (await fetch('/api/track/state',{cache:'no-store'})).json())}catch(e){}setTimeout(tick,400)}
-$('start').onclick=()=>{const go=$('gostart').checked;
-  if(!confirm((go?'팔이 대기 자세로 먼저 움직인 뒤 ':'지금 자리에서 ')+'받침이 좌우로 움직이며 차를 따라갑니다. 주변을 비웠나요?'))return;
-  $('start').disabled=true;$('out').className='msg';$('out').textContent='카메라와 팔을 준비하는 중… (처음에는 몇 초 걸려요)';
-  post('start',{sign:$('flip').checked?-1:1,go_start:go})};
-$('stop').onclick=()=>post('stop');
-$('savesign').onclick=()=>{const s=$('flip').checked?-1:1;if(confirm('받침 방향을 '+(s<0?'-1 (반대)':'+1 (기본)')+' 로 설정에 저장할까요?'))post('save-sign',{sign:s})};
-tick();
-</script>
-"""
-
-
-def track_page(hub: Hub) -> bytes:
-    return page("차 추적 테스트", TRACK_BODY, TRACK_SCRIPT.replace("__TOKEN__", hub.token))
+def place_page(hub: Hub) -> bytes:
+    from .place_page import PLACE_CSS, place_body, place_script
+    return page("바구니 넣기 학습", f"<style>{PLACE_CSS}</style>" + place_body(), place_script(hub.token), camera=False)
 
 
 def yolo_page() -> bytes:
@@ -965,12 +989,14 @@ def yolo_page() -> bytes:
 def run18_page() -> bytes:
     body = ("<h1><span class='num g-run'>5</span>상차 미션 실행 (팔이 차를 세움)</h1>"
             "<p class=sub>팔을 실제로 움직이니 브라우저가 아니라 <b>터미널</b>에서 실행합니다. 주변을 비우고 전원 스위치에 손을 두세요.</p>"
-            "<p>순서: 대기 자세 → 차 추적 → 정지 신호 → 계속 추적하며 완전 정차 확인 → 포스트잇 색 → 그 색 공 집기 → 바구니에 넣기 → 성공 확인 → 출발 신호.</p>"
-            "<p class=small>먼저 필요한 것: 1번 대기 자세 저장 · 3번의 빨간공_집기 / 파란공_집기 / 바구니_넣기 (★ 선택) · 3번 ⑤ 기준 차 위치. 추적이 잘 되는지는 4번에서 먼저 확인하세요.</p>"
-            "<p class=small>이 허브(브라우저)가 켜져 있으면 팔 포트를 쓰고 있어요. 허브를 끝낸 뒤 실행하세요.</p>"
+            "<p>순서: 프로그램을 켜 두면 <b>차 전원이 켜질 때(첫 상태 메시지)</b> 대기 자세로 감 → 차와 상자가 함께 보이면 바로 정지 신호 → 완전 정차 확인 → "
+            "포스트잇 색 → 그 색 공 집기 → 바구니 위에 맞추고 넣기(4번 학습 ★ 세트) → 성공 확인 → 대기 자세 + 출발 신호. "
+            "실패하면 공을 받침대에 다시 놓는 시간만큼 기다렸다가 공 집기부터 다시, 3번째도 실패하면 FAILED(공 없이 출발).</p>"
+            "<p class=small>먼저 필요한 것: 1번 대기 자세 저장 · 3번의 빨간공_집기 / 파란공_집기 (★ 선택) · 4번 ★ 세트에 ✔ 성공 회차.</p>"
+            "<p class=small>허브가 켜져 있으면 팔 포트를 쓰고 있어요. 허브를 끝낸 뒤 실행하세요.</p>"
             "<pre>cd ~/so101-lab\n.venv/bin/python -m mission.loading --check      # 준비가 됐는지만 확인 (팔 안 움직임)\n"
             ".venv/bin/python -m mission.loading --no-ros     # 차 통신 없이 연습 (신호는 화면에만 출력)\n"
-            ".venv/bin/python -m mission.loading              # 진짜: ROS2 로 차와 통신 (Docker 안에서)</pre>")
+            "./상차_도커.sh                                   # 진짜: Docker 안에서 ROS2 로 차와 통신</pre>")
     return page("상차 미션 실행", body)
 
 
@@ -994,6 +1020,11 @@ def apply_settings(hub: Hub, data: dict) -> str:
             if text.lower() not in ("true", "false", "1", "0", "켜짐", "꺼짐", "on", "off"):
                 raise ValueError(f"'{label}' 은 켜짐 또는 꺼짐이어야 해요.")
             setattr(cfg, name, text.lower() in ("true", "1", "켜짐", "on"))
+            continue
+        if kind == "tri":
+            if text not in ("0", "1", "+1", "-1"):
+                raise ValueError(f"'{label}' 은 0, 1, -1 중 하나여야 해요.")
+            setattr(cfg, name, int(text))
             continue
         if kind == "sign":
             if text not in ("1", "+1", "-1"):
@@ -1147,12 +1178,21 @@ def make_router(hub: Hub):
                 if hub.watch_desk is None:
                     return self.send_json(409, {"message": "대기 자세 저장 화면을 다시 열어 주세요."})
                 return self.send_json(200, hub.watch_desk.state())
-            if path == "/api/track/state":                           # 4번 상태 (읽기만)
-                from .track_test import idle_status
-                return self.send_json(200, hub.track.status() if hub.track is not None else idle_status(hub.cfg()))
-            if path == "/img/track.jpg":
-                data = hub.track.eye.render(hub.cfg().track_deadband_px) if hub.track is not None else None
-                return self.send(200, "image/jpeg", data) if data else self.send(404, "text/plain")
+            if path == "/api/place/state":                           # 4번 상태 (읽기만)
+                if hub.place is None:
+                    return self.send_json(409, {"message": "바구니 넣기 학습 화면을 다시 열어 주세요."})
+                return self.send_json(200, hub.place.state())
+            if path == "/img/live.jpg":                              # 모든 화면의 카메라 창 (YOLO 인식)
+                data, why = hub.live_jpeg()
+                if data:
+                    return self.send(200, "image/jpeg", data)
+                return self.send(503, "text/plain; charset=utf-8", why.encode())
+            if path.startswith("/img/place/"):                       # 4번 저장 사진 (세트 폴더 안의 .jpg 만)
+                parts = path.split("/")
+                target = None
+                if len(parts) == 5 and hub.place is not None:
+                    target = hub.place.book.image_path(parts[3], parts[4])
+                return self.send(200, "image/jpeg", target.read_bytes()) if target else self.send(404, "text/plain")
             if path == "/api/yolo/state":                            # 17번: 지금 사진에서 찾은 것
                 return self.send_json(200, hub.yolo_look())
             if path == "/img/yolo.jpg":
@@ -1178,8 +1218,9 @@ def make_router(hub: Hub):
                 if name == "watchpose":
                     problem = hub.open_watch()
                     return self.html(home_page(hub, problem) if problem else watch_page(hub))
-                if name == "track":
-                    return self.html(track_page(hub))
+                if name == "place":
+                    problem = hub.open_place()
+                    return self.html(home_page(hub, problem) if problem else place_page(hub))
                 if name == "motion":
                     problem = hub.open_motion()
                     return self.html(home_page(hub, problem) if problem else motion_page(hub))
@@ -1250,21 +1291,28 @@ def make_router(hub: Hub):
                     if reason:
                         raise ValueError(reason)
                     return self.send_json(200, {"message": hub.watch_desk.handle(path[len("/api/watch/"):], data)})
-                if path == "/api/track/start":
-                    return self.send_json(200, {"message": hub.start_track(data)})
-                if path == "/api/track/stop":
-                    if not hub.track_running():
-                        raise ValueError("지금 추적 중이 아니에요.")
-                    hub.track.stop()
-                    return self.send_json(200, {"message": "정지 요청을 보냈어요. 팔은 그 자리에서 힘을 준 채 멈춰요."})
-                if path == "/api/track/save-sign":
-                    sign = data.get("sign")
-                    if sign not in (1, -1):
-                        raise ValueError("방향은 1 또는 -1 이어야 해요.")
-                    cfg = hub.cfg()
-                    cfg.track_pan_sign = sign
-                    cfg.save(hub.config_path)
-                    return self.send_json(200, {"message": f"받침 방향을 {sign:+d} 로 저장했어요. 다음 추적부터 적용돼요."})
+                if path.startswith("/api/place/"):
+                    if hub.place is None:
+                        raise ValueError("바구니 넣기 학습 화면을 다시 열어 주세요.")
+                    action = path[len("/api/place/"):]
+                    if action in ("learn", "test"):
+                        reason = hub.arm_in_use(ignore="place")
+                        if reason:
+                            raise ValueError(reason)
+                        hub.place.cfg = hub.cfg()                     # 설정(6번)을 고쳤으면 다음 시작부터 반영
+                        hub.place.ops.cfg = hub.place.cfg
+                        link = hub.place_link(data.get("no_ros") is True)
+                        try:
+                            start = int(data.get("start", 2))
+                        except (TypeError, ValueError):
+                            raise ValueError("시작 단계를 다시 고르세요.") from None
+                        return self.send_json(200, {"message": hub.place.start(action, str(data.get("sid")), link, start,
+                                                                               data.get("color"), data.get("pause") is True)})
+                    if action == "goto" or action == "watch-redo":
+                        reason = hub.arm_in_use(ignore="place")
+                        if reason:
+                            raise ValueError(reason)
+                    return self.send_json(200, {"message": hub.place.handle(action, data)})
                 if path.startswith("/api/motion/"):
                     if hub.motion_desk is None:
                         raise ValueError("동작 티칭 화면을 다시 열어 주세요.")

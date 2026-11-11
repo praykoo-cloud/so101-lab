@@ -112,22 +112,23 @@ python -m mission.mission_main               # 실제 (Pi 의 Docker, ROS2, 팀 
 | `motions.py` | **동작 저장소**: 동작 = 자세 여러 개를 순서대로. 같은 동작을 여러 회차로 저장 · 이름 변경 · 삭제 · ★ 선택 · 성적표. `data/motions.json` |
 | `motion_page.py` | 허브 **3번 동작 티칭** 화면 (힘 빼기 → 지점 추가 → 저장 → ▶ 재생 → 잘 됨/안 됨 → ★ 이걸로 사용) |
 | `watch_page.py` | 허브 **1번 대기 자세 저장** 화면 (차가 오는 쪽을 바라보는 고정 자세 `watch` 를 절대 위치로 저장 · 확인. 카메라 필요 없음) |
-| `track_test.py` | 허브 **4번 차 추적 테스트** (받침만 돌려 차를 쫓아가는 것만 시험. 정지 신호 · 집기 없음. 방향 `track_pan_sign` 확인 · 저장) |
+| `place_learn.py` | 허브 **4번 바구니 넣기 학습**의 저장소: 세트(★ 실행용) · 회차(✔ 사용 / ✘ 제외) · YOLO 사진 · 모터 값. `data/place_learn.json`, `data/place_learn/` |
+| `place_flow.py` | 상차 한 사이클의 단계 2~8 (보이면 바로 정지 · 색 · 집기 · 바구니 위 실시간 맞추기 · 안으로 · 집게 해제 · 성공 확인). 4번과 `loading.py` 가 같이 쓴다 |
+| `place_page.py` | 허브 **4번** 화면: 실제 순서대로 돌리며 5~8 을 손으로 가르치기 + 고른 단계부터 테스트 |
+| `track_test.py` | (허브 메뉴에서는 삭제됨, 2026-11-11) 예전 차 추적 테스트 |
 | `yolo.py` | **YOLO 인식** (`models/arm_v1_yolo11n_320.onnx`, OpenCV 만 사용): 차 · 상자 · 포스트잇 · 공이 든 상자. 허브 **2번**에서 확인 |
-| `loading.py` | **상차 미션 본체**: 추적 → 정지 신호 → 계속 추적하며 완전 정차 확인(1.5초) → 색 → 집기 → 넣기 → 성공 확인 → 출발 신호 |
+| `loading.py` | **상차 미션 본체** (2026-11-11 방식): 차 전원 기다림 → 대기 자세 → 차 + 상자가 보이면 바로 정지 신호 → 완전 정차 확인 → 색 → 집기 → 4번 학습으로 넣기 → 성공 확인 → 대기 자세 → 출발 신호. 실패는 3번까지 (설정 '예전 추적 방식' 을 켜면 예전 흐름) |
 | `load_link.py` | 차와 통신: `/arm/loading_status` (LoadingStatus) 발행, `/car/status` (CarStatus) 수신. `--no-ros` 면 화면 출력만 |
 
-준비 순서 (실물):
+준비 순서 (실물, 2026-11-11 방식):
 1. 허브 1번: 대기 자세 `watch` 저장 (차가 오는 쪽을 바라보는 고정 자세)
-2. 허브 2번: 차를 기준 정차 위치에 세우고, 받침을 돌려 상자가 화면 가운데에 오게 한다
-3. 허브 3번 ⑤: "지금 받침 각도를 기준으로 저장"
-4. 허브 3번 ①: `빨간공_집기` · `파란공_집기` · `바구니_넣기` 를 각각 여러 회차 가르치고 ▶ 재생 → ★ 선택
-   (먼저 허브 4번 **차 추적 테스트**로 차를 잘 쫓아가는지 · 받침 방향이 맞는지 확인하면 좋다)
-   - `바구니_넣기` 의 마지막 지점은 **바구니 안이 카메라에 보이는 자세**로 끝낸다 (성공 확인을 그 자리에서 한다)
-5. `python -m mission.loading --check` → `--no-ros` → (Docker) 인자 없이
+2. 허브 2번: 차와 상자가 YOLO 에 잘 잡히는지 확인 (모든 화면 오른쪽 아래 작은 카메라 창에서도 보인다)
+3. 허브 3번: `빨간공_집기` · `파란공_집기` 를 여러 회차 가르치고 ▶ 재생 → ★ 선택
+4. 허브 4번 (Docker 안에서 `./허브_도커.sh`): 세트를 만들고 [학습 시작] → 5 · 6 · 7 · 8 저장 → [다음 단계 진행]. 여러 번 반복한 뒤 테스트
+5. `python -m mission.loading --check` → `--no-ros` → `./상차_도커.sh`
 
 ```bash
-python -m mission.hub --start motion             # 3번 화면 (Windows: 동작티칭_한방.cmd). 바로 열 화면: watchpose, yolo, motion, track, settings
+python -m mission.hub --start motion             # 3번 화면 (Windows: 동작티칭_한방.cmd). 바로 열 화면: watchpose, yolo, motion, place, settings
 python -m mission.hub --start motion --fake-arm  # 팔 없이 화면만 눌러 보기
 python -m mission.loading --check                # 준비 확인 (팔 안 움직임)
 python -m mission.loading --no-ros --jobs 1      # 차 통신 없이 한 대만

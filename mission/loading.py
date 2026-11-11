@@ -3,10 +3,19 @@
 실행 (Pi, 허브를 끈 뒤):
     .venv/bin/python -m mission.loading --check       # 준비가 됐는지만 확인 (팔 안 움직임)
     .venv/bin/python -m mission.loading --no-ros      # 차 통신 없이 연습 (신호는 화면에만 출력)
-    .venv/bin/python -m mission.loading               # 진짜: ROS2 로 차와 통신 (Docker 안에서)
+    ./상차_도커.sh                                     # 진짜: Docker 안에서 ROS2 로 차와 통신
     .venv/bin/python -m mission.loading --no-ros --jobs 1   # 차 한 대만 처리하고 끝
 
-순서 (한 대)
+순서 (한 대, 기본 = 2026-11-11 방식. 단계 번호는 허브 4번과 같다)
+  0) 켜 두면 차의 첫 상태 메시지(차 전원 켜짐)를 기다렸다가 대기 자세로 간다          (--no-ros 면 바로)
+  2) 대기 자세에서 YOLO 로 지켜본다                                                   → WAITING
+  3) 차 + 상자가 연속 N장 함께 보이면 바로 정지 신호, 상자가 1.5초 안 움직이면 완전 정차  → STOP_REQUEST
+  4) 포스트잇 색 → 그 색 공 집기 (3번 동작 티칭)                                       → IN_PROGRESS
+  5~8) 바구니 위에 맞추기 → 안으로 → 집게 해제 → 성공 확인 (허브 4번 ★ 세트의 학습 값)
+  9) 성공: 대기 자세로 돌아간 뒤 SUCCESS (출발)
+  10) 실패: 대기 자세에서 공을 받침대에 놓는 시간만큼 기다렸다가 4) 부터. 3번째도 실패면 FAILED (공 없이 출발)
+
+예전 방식 (설정 '예전 추적 방식' 을 켰을 때)
   1) 대기 자세(watch)에서 YOLO 로 차 위 상자(없으면 차)를 찾는다                      → WAITING
   2) 보이면 받침(1번 관절)만 돌려 화면 가운데에 두고 따라간다                         → TRACKING
   3) 받침이 '기준 차 위치' 각도에 오면 차에게 정지 신호                               → STOP_REQUEST
@@ -38,6 +47,8 @@ from pathlib import Path
 from .config import RUNTIME_DIR, MissionConfig
 from .m3_pick_place import band_ok
 from .motions import MotionBook, MotionError, play
+from .place_flow import ArmOps, FlowAbort, PlaceRunner
+from .place_learn import PlaceBook, PlaceError
 from .yolo import BASKET_NAMES, pick_best, track_target
 
 PICK_MOTION = {"red": "빨간공_집기", "blue": "파란공_집기"}
@@ -91,8 +102,11 @@ class _Leaving:
 
 class Loader:
     def __init__(self, cfg: MissionConfig, arm, eye, link, book: MotionBook,
-                 clock=time.monotonic, sleep=time.sleep, log=None):
+                 clock=time.monotonic, sleep=time.sleep, log=None, places: PlaceBook | None = None, ops=None):
         self.cfg, self.arm, self.eye, self.link, self.book = cfg, arm, eye, link, book
+        self.places = places                          # 허브 4번 학습 (기본 방식에서 쓴다)
+        self.ops = ops                                # 팔에게 시키는 일 (None 이면 arm 으로 만든다)
+        self.wait_car_power = False                   # 켜면 차의 첫 상태 메시지를 받은 뒤 대기 자세로 간다
         self.clock, self.sleep = clock, sleep
         self._log = log or (lambda event, **kw: print(f"[{time.strftime('%H:%M:%S')}] {event} {kw if kw else ''}", flush=True))
         self.jobs_done = 0
@@ -105,14 +119,78 @@ class Loader:
     # ── 준비 확인 ───────────────────────────────────────────────────────
     def problems(self) -> list[str]:
         probs = [p.replace("(m0_teach_poses.py)", "(허브 1번 대기 자세 저장)") for p in self.arm.preflight([self.cfg.load_wait_pose])]
-        for name in (*PICK_MOTION.values(), PLACE_MOTION):
+        names = (*PICK_MOTION.values(), PLACE_MOTION) if self.cfg.load_use_tracking else tuple(PICK_MOTION.values())
+        for name in names:
             try:
                 self.book.chosen(name)
             except MotionError as e:
                 probs.append(str(e))
-        if self.book.car_ref_pan() is None:
-            probs.append("'기준 차 위치' 가 저장되지 않았어요 (허브 3번 ⑤).")
+        if self.cfg.load_use_tracking:
+            if self.book.car_ref_pan() is None:
+                probs.append("'기준 차 위치' 가 저장되지 않았어요 (허브 3번 ⑤).")
+        else:
+            try:
+                if self.places is None:
+                    raise PlaceError("바구니 넣기 학습 파일을 읽지 못했어요.")
+                self.places.learned(self.places.chosen_set())
+            except PlaceError as e:
+                probs.append(str(e))
         return probs
+
+    # ── 기본 방식 (2026-11-11): 보이면 바로 정지 → 집기 → 학습한 넣기 ─────
+    def runner(self) -> PlaceRunner:
+        ops = self.ops if self.ops is not None else ArmOps(self.arm, self.cfg)
+        r = PlaceRunner(self.cfg, ops, self.eye, self.link, self.book, clock=self.clock, sleep=self.sleep, log=self._log)
+        r.max_wait = self.max_wait
+        return r
+
+    def serve_one_new(self) -> str:
+        """차 한 대: "success" | "failed". 결과를 알리기 전에 대기 자세로 돌아간다"""
+        self.car_was_stopped = False
+        result, why = "failed", ""
+        runner = self.runner()
+        aborted = False
+        try:
+            if not runner.wait_car_and_stop():
+                return result
+            color = runner.read_color()
+            if color is None:
+                self.log("no_color", msg="포스트잇 색을 읽지 못했어요 → 공 없이 출발시킵니다")
+                return result
+            learned = self.places.learned(self.places.chosen_set())
+            for n in range(1, self.cfg.attempts_max + 1):
+                if self.car_left_early():
+                    self.log("car_left_early", msg="차가 먼저 떠났어요 → 중단")
+                    return result
+                self.link.set("IN_PROGRESS", color, n)
+                self.log("attempt", n=n, color=color)
+                ok, why = runner.pick(color)
+                if ok:
+                    ok, why = runner.auto_place(learned, on_step=lambda num, k, w: self.log("step", n=num, ok=k, why=w))
+                self.log("attempt_result", n=n, ok=ok, why=why)
+                if ok:
+                    result = "success"
+                    return result
+                if n < self.cfg.attempts_max:
+                    runner.ops.go_wait()                             # 바구니에서 빠져나와 기다린다
+                    runner.pause(self.cfg.load_retry_wait_seconds)   # 떨어진 공을 사람이 받침대에 놓는 시간 (규정이 허용)
+            return result
+        except FlowAbort as e:
+            aborted = True
+            self.log("ERROR", reason=str(e))
+            raise LoadAbort(str(e)) from e
+        except Exception as e:
+            aborted = True
+            self.log("ERROR", reason=str(e))
+            raise
+        finally:
+            if not aborted:
+                try:
+                    self.go_wait()                                   # 9) 대기 자세로 돌아간 뒤
+                except Exception as e:
+                    self.log("warn", msg=f"대기 자세로 가지 못했어요: {e}")
+            self.link.set("SUCCESS" if result == "success" else "FAILED")     # 어떤 경우에도 결과를 알려 차를 출발시킨다
+            self.log("result", result=result, why=why)
 
     # ── 팔 (시험에서는 이 세 개만 바꿔 끼운다) ──────────────────────────
     def play_motion(self, name: str, pan_offset: float = 0.0) -> dict:
@@ -336,10 +414,22 @@ class Loader:
         else:
             self.log("warn", msg="차가 떠나는 것을 확인하지 못했지만 대기로 돌아갑니다")
 
+    def wait_for_car_power(self) -> None:
+        """차 전원이 켜져 첫 상태 메시지(/car/status)가 올 때까지 기다린다"""
+        self.log("wait_car_power", msg="차 전원이 켜지기를 기다리는 중 (/car/status)")
+        t0 = self.clock()
+        while self.link.car_state is None:
+            if self.max_wait is not None and self.clock() - t0 > self.max_wait:
+                raise TimeoutError("차의 상태 메시지가 오지 않았습니다 (시험용 시간 제한)")
+            self.sleep(0.2)
+        self.log("car_power", car=self.link.car_state)
+
     def boot(self) -> None:
         probs = self.problems()
         if probs:
             raise LoadAbort("시작 전 점검 실패: " + " / ".join(probs))
+        if self.wait_car_power:
+            self.wait_for_car_power()
         self.arm.torque_on()                                    # 지금 자리에서 잠금 (튀지 않음)
         if not self.go_wait():
             raise LoadAbort("대기 자세로 가지 못했어요")
@@ -349,7 +439,10 @@ class Loader:
     def run(self, max_jobs: int | None = None) -> None:
         self.boot()
         while max_jobs is None or self.jobs_done < max_jobs:
-            self.serve_one()
+            if self.cfg.load_use_tracking:
+                self.serve_one()
+            else:
+                self.serve_one_new()
             self.jobs_done += 1
             self.go_wait()                                      # 대기 자세로 복귀
             self.wait_car_gone()
@@ -374,6 +467,7 @@ def main(argv=None) -> int:
     ap.add_argument("--no-ros", action="store_true", help="ROS2 없이 (차에게 보낼 신호를 화면에만 출력)")
     ap.add_argument("--port", default=None, help="팔 포트 (기본: 설정 값). fake = 가짜 팔")
     ap.add_argument("--jobs", type=int, default=None, help="차를 이만큼 처리하고 끝 (기본: 계속)")
+    ap.add_argument("--no-car-wait", action="store_true", help="차 전원(첫 상태 메시지)을 기다리지 않고 바로 대기 자세로")
     args = ap.parse_args(argv)
 
     cfg = MissionConfig.load()
@@ -384,8 +478,9 @@ def main(argv=None) -> int:
     from .yolo import Detector
     try:
         book = MotionBook()
+        places = PlaceBook()
         detector = Detector(cfg.yolo_model, cfg.yolo_conf)
-    except (MotionError, FileNotFoundError) as e:
+    except (MotionError, PlaceError, FileNotFoundError) as e:
         print(f"준비 문제: {e}")
         return 1
     try:
@@ -396,7 +491,7 @@ def main(argv=None) -> int:
 
     if args.check:
         try:
-            probs = Loader(cfg, arm, None, FakeLoadLink(), book).problems()
+            probs = Loader(cfg, arm, None, FakeLoadLink(), book, places=places).problems()
         finally:
             arm.close()
         if probs:
@@ -404,7 +499,8 @@ def main(argv=None) -> int:
             for p in probs:
                 print("  ✘", p)
             return 1
-        print("✔ 자세 · 동작 · 기준 차 위치 · YOLO 모델이 모두 준비됐어요.")
+        print("✔ 대기 자세 · 공 집기 동작 · " + ("기준 차 위치" if cfg.load_use_tracking else "4번 넣기 학습 ★ 세트")
+              + " · YOLO 모델이 모두 준비됐어요.")
         return 0
 
     from .vision import CameraSource
@@ -421,7 +517,8 @@ def main(argv=None) -> int:
         src.close()
         arm.close()
         return 1
-    loader = Loader(cfg, arm, Eye(src, detector), link, book, log=_file_logger(RUNTIME_DIR / "loading.log"))
+    loader = Loader(cfg, arm, Eye(src, detector), link, book, log=_file_logger(RUNTIME_DIR / "loading.log"), places=places)
+    loader.wait_car_power = cfg.load_wait_car_power and not args.no_ros and not args.no_car_wait
     link.start()
     aborted = False
     try:

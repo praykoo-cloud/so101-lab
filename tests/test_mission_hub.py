@@ -34,6 +34,14 @@ class StubCapture:
         pass
 
 
+class StubDetector:
+    """YOLO 대신: 늘 차와 상자를 하나씩 찾았다고 한다"""
+
+    def detect(self, frame):
+        from mission.yolo import Det
+        return [Det("car", 0.9, 200, 150, 200, 150), Det("box", 0.9, 260, 180, 80, 60)]
+
+
 class HubTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -109,34 +117,94 @@ class HubTest(unittest.TestCase):
         for word in ("가상", "가짜", "PRACTICE", "연습용", "fake"):
             self.assertNotIn(word, text)
 
-    def test_new_pages_and_track_api(self):
-        status, body = self.get("/p/track")
-        self.assertEqual(status, 200)
-        self.assertIn("차 추적 테스트", body.decode())
-        status, body = self.get("/api/track/state")
-        state = json.loads(body)
-        self.assertEqual((status, state["state"], state["frames"]), (200, "idle", 0))
+    def test_track_test_is_gone_and_missing_arm_is_explained(self):
+        for path in ("/p/track", "/api/track/state", "/img/track.jpg"):          # 4번 차 추적 테스트는 삭제
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                self.get(path)
+            self.assertEqual(cm.exception.code, 404, path)
+        self.assertEqual(self.post("/api/track/start", {})[0], 404)
         self.hub.ensure_arm = lambda: "팔 포트가 보이지 않아요. 팔 12V 전원과 USB 케이블을 확인하세요."
-        status, body = self.get("/p/watchpose")                             # 팔이 없으면 이유를 홈에 보여 준다
-        self.assertIn("팔 포트가 보이지 않아요", body.decode())
-        with self.assertRaises(urllib.error.HTTPError) as cm:               # 이미지는 추적을 시작하기 전에는 없다
-            self.get("/img/track.jpg")
-        self.assertEqual(cm.exception.code, 404)
+        for path in ("/p/watchpose", "/p/place"):                               # 팔이 없으면 이유를 홈에 보여 준다
+            status, body = self.get(path)
+            self.assertIn("팔 포트가 보이지 않아요", body.decode(), path)
+        self.assertEqual(self.post("/api/watch/save", {})[0], 400)                # 화면을 열기 전이면 안내
+        self.assertEqual(self.post("/api/place/learn", {})[0], 400)
 
-    def test_track_api_rules(self):
-        self.assertEqual(self.post("/api/track/stop", {}, token=False)[0], 403)        # 토큰 없으면 거절
-        status, data = self.post("/api/track/stop", {})
-        self.assertEqual(status, 400)
-        self.assertIn("추적 중이 아니", data["message"])
-        self.assertEqual(self.post("/api/track/save-sign", {"sign": 3})[0], 400)
-        status, data = self.post("/api/track/save-sign", {"sign": -1})
-        self.assertEqual(status, 200)
-        self.assertEqual(MissionConfig.load(self.cfg_path).track_pan_sign, -1)         # 임시 설정 파일에만 저장됨
+    def test_every_page_has_the_yolo_camera_window(self):
+        for path in ("/hub", "/p/settings", "/p/yolo", "/p/run18", "/p/doctor"):
+            status, body = self.get(path)
+            self.assertIn("id=livecam", body.decode(), path)
         self.hub.ensure_camera = lambda: "카메라를 열지 못했어요: 시험용 문제"
-        status, data = self.post("/api/track/start", {})
+        with self.assertRaises(urllib.error.HTTPError) as cm:                     # 카메라가 없으면 이유를 글로
+            self.get("/img/live.jpg")
+        self.assertEqual(cm.exception.code, 503)
+        self.assertIn("시험용 문제", cm.exception.read().decode())
+        self.hub.camera_failed_at = 0.0
+        self.hub.ensure_camera = Hub.ensure_camera.__get__(self.hub)
+        self.stub_camera()
+        self.hub.get_detector = lambda: StubDetector()
+        status, body = self.get("/img/live.jpg")
+        self.assertEqual((status, body[:2]), (200, b"\xff\xd8"))                   # JPEG
+
+    def open_place(self):
+        from mission import place_learn
+        root = Path(self.tmp.name)
+        for name, value in (("PLACE_FILE", root / "place.json"), ("PLACE_DIR", root / "place")):
+            patcher = mock.patch.object(place_learn, name, value)                 # 실제 data/ 를 건드리지 않게
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.hub.allow_fake = True
+        self.hub.arm_port = "fake"
+        self.stub_camera()
+        self.hub.get_detector = lambda: StubDetector()
+        with mock.patch("mission.motions.MOTIONS_FILE", root / "motions.json"):
+            status, body = self.get("/p/place")
+        self.assertEqual(status, 200)
+        return body.decode()
+
+    def test_place_page_sets_and_rules(self):
+        text = self.open_place()
+        self.assertIn("바구니 넣기 학습", text)
+        self.assertNotIn("id=livecam", text)                                      # 4번은 큰 YOLO 화면이 따로 있다
+        status, state = 200, json.loads(self.get("/api/place/state")[1])
+        self.assertEqual((state["busy"], state["book"]["sets"]), (False, []))
+        self.assertEqual(self.post("/api/place/set-create", {"label": "기본_세트"}, token=False)[0], 403)
+        status, out = self.post("/api/place/set-create", {"label": "기본_세트"})
+        self.assertEqual(status, 200, out)
+        sid = json.loads(self.get("/api/place/state")[1])["book"]["chosen"]
+        status, out = self.post("/api/place/test", {"sid": sid, "start": 5, "color": "red", "no_ros": True})
         self.assertEqual(status, 400)
-        self.assertIn("시험용 문제", data["message"])
-        self.assertEqual(self.post("/api/watch/save", {})[0], 400)                      # 화면을 열기 전이면 안내
+        self.assertIn("✔ 사용 회차가 없어요", out["message"])                       # 학습 전에는 테스트 못 함
+        status, out = self.post("/api/place/save", {"step": 5})
+        self.assertEqual(status, 400)
+        self.assertIn("차례가 아니", out["message"])                               # 순서대로만 저장
+        self.assertEqual(self.post("/api/place/stop", {})[0], 400)
+        self.assertTrue((Path(self.tmp.name) / "place.json").exists())
+
+    def test_place_learn_starts_and_stops_with_screen_only_link(self):
+        self.open_place()
+        self.post("/api/place/set-create", {"label": "a"})
+        sid = json.loads(self.get("/api/place/state")[1])["book"]["chosen"]
+        self.hub.place.ops.go_wait = lambda: True                                 # 가짜 팔: 대기 자세는 바로 도착
+        self.hub.place.ops.angles = lambda: {j: 0.0 for j in "12345"}
+        status, out = self.post("/api/place/learn", {"sid": sid, "no_ros": True})
+        self.assertEqual(status, 200, out)
+        self.assertIn("arm_in_use", dir(self.hub))
+        self.assertIn("바구니 넣기 학습(4번)", self.hub.arm_in_use() or "")         # 다른 화면은 팔을 못 쓴다
+        status, out = self.post("/api/place/stop", {})
+        self.assertEqual(status, 200)
+        self.hub.place.stop_and_join(5)
+        state = json.loads(self.get("/api/place/state")[1])
+        self.assertFalse(state["busy"])
+        self.assertTrue(state["link"]["fake"])
+        self.assertIsNotNone(state["book"]["sets"][0]["watch"])                   # 처음 학습하면 대기 자세 저장
+
+    def test_tilt_setting_accepts_only_zero_or_sign(self):
+        self.assertEqual(self.post("/api/settings", {"settings": {"place_servo_tilt_sign": "-1"}})[0], 200)
+        self.assertEqual(MissionConfig.load(self.cfg_path).place_servo_tilt_sign, -1)
+        status, out = self.post("/api/settings", {"settings": {"place_servo_tilt_sign": "2"}})
+        self.assertEqual(status, 400)
+        self.assertIn("0, 1, -1", out["message"])
 
     def test_pages_open(self):
         for path in ("/p/doctor", "/p/settings", "/p/lock", "/p/store", "/p/run9", "/p/run10"):
@@ -445,7 +513,7 @@ class HubTest(unittest.TestCase):
     def test_tracking_settings_shown_saved_and_validated(self):
         page = self.get("/p/settings")[1].decode()
         self.assertIn("차 추적 사용", page)
-        self.assertIn("추적 방향", page)
+        self.assertIn("가로 맞추기 방향", page)
         status, out = self.post("/api/settings", {"settings": {"tracking_enabled": "true", "track_pan_sign": "-1",
                                                                "track_stop_seconds": "3", "track_pan_limit_deg": "20"}})
         self.assertEqual(status, 200, out)

@@ -12,6 +12,8 @@ cd /root/so101-lab
 mkdir -p .ws/src
 ln -sfn /root/so101-lab/ros2/so101_interfaces .ws/src/so101_interfaces
 ln -sfn /root/so101-lab/ros2/so101_ros .ws/src/so101_ros
+# 팀 레포의 메시지 패키지 (차 ↔ 팔 상차 신호). ros2/common_interfaces 에 넣어 두면 함께 빌드한다
+[ -d /root/so101-lab/ros2/common_interfaces ] && ln -sfn /root/so101-lab/ros2/common_interfaces .ws/src/common_interfaces
 (cd .ws && colcon build --symlink-install > /tmp/colcon.log 2>&1) || { cat /tmp/colcon.log; exit 1; }
 source .ws/install/setup.bash
 

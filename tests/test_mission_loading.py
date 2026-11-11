@@ -170,7 +170,8 @@ class LoadingTest(unittest.TestCase):
         self.book.set_car_ref(10.0)
         self.book.add_take("바구니_넣기", one_point(), ref_pan=10.0)
         self.cfg = MissionConfig(grip_ball_min_pct=20.0, grip_ball_max_pct=40.0, track_gain_deg_per_px=0.04,
-                                 track_period=0.1, load_retry_wait_seconds=1.0, load_leave_timeout=10.0)
+                                 track_period=0.1, load_retry_wait_seconds=1.0, load_leave_timeout=10.0,
+                                 load_use_tracking=True)          # 이 묶음은 예전 추적 방식 시험
         self.link = FakeLoadLink()
         self.events = []
 
@@ -300,6 +301,151 @@ class LoadingTest(unittest.TestCase):
             loader.run(max_jobs=1)
         self.assertNotIn("STOP_REQUEST", self.link.states())
 
+    def test_message_numbers_match_team_interface(self):
+        self.assertEqual(ARM_STATES.index("STOP_REQUEST"), 2)
+
+
+class WorldOps:
+    """기본 방식 시험용 팔: 받침 각도는 FakeArm.pan 과 같다. 7(집게 해제) 때 바구니 위에 맞춰져 있으면 공이 들어간다"""
+
+    def __init__(self, world, arm, events):
+        self.world, self.arm, self.events = world, arm, events
+        self.a = {"1": arm.pan, "2": 0.0, "3": 0.0, "4": 0.0, "5": 0.0}
+        self.miss = []                    # 예: [True] = 첫 넣기는 빗나감
+
+    def too_hot(self):
+        return self.arm.hot
+
+    def go_wait(self):
+        self.events.append(("go_wait", {}))
+        self.arm.go("watch")
+        self.a["1"] = self.arm.pan
+        return True
+
+    def angles(self):
+        self.a["1"] = self.arm.pan
+        return dict(self.a)
+
+    def grip_pct(self):
+        return self.arm.grip
+
+    def move_to(self, angles, timeout=12.0):
+        self.a.update({j: float(v) for j, v in angles.items()})
+        self.arm.pan = self.a["1"]
+        self.world.sleep(0.5)
+        return True
+
+    def nudge(self, joint, deg):
+        self.a[joint] = deg
+        if joint == "1":
+            self.arm.pan = deg
+
+    def grip(self, pct):
+        if pct > 50 and self.a["2"] < -10:                      # 바구니 안에서 열었다
+            miss = self.miss.pop(0) if self.miss else False
+            if not miss and abs(self.arm.pan - self.world.car) <= 1.5 and self.world.stopped():
+                self.world.loaded = self.color
+        self.arm.grip = pct
+
+    def torque_arm(self, on):
+        pass
+
+    def hold(self):
+        pass
+
+    def play_pick(self, color, book, stop):
+        self.color = color
+        self.events.append(("ops_pick", {"color": color}))
+        self.arm.grip = 30.0
+        self.world.sleep(1.0)
+        return {"reached": True, "stopped": False, "why": ""}
+
+
+class NewFlowTest(unittest.TestCase):
+    """기본 방식 (2026-11-11): 차 + 상자가 보이면 바로 정지 → 집기 → 4번 학습으로 넣기 → 대기 자세 → 출발"""
+
+    def setUp(self):
+        from mission.place_learn import PlaceBook, make_snap
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        self.book = MotionBook(root / "motions.json", root / "backup")
+        for name in ("빨간공_집기", "파란공_집기"):
+            self.book.add_take(name, one_point())
+        self.places = PlaceBook(root / "place.json", root / "place", root / "backup")
+        sid = self.places.create_set("a")
+
+        def snap(j2, grip=30.0, cx=None):
+            basket = None if cx is None else {"name": "box", "conf": 0.9, "cx": cx, "cy": 230.0, "w": 80.0, "h": 60.0}
+            return make_snap({"1": -18.0, "2": j2, "3": 0, "4": 0, "5": 0}, grip, basket, None)
+        self.places.add_take(sid, {"above": snap(0.0, cx=WIDTH / 2), "inside": snap(-20.0), "release": snap(-20.0, 80.0),
+                                   "check": snap(5.0)}, {}, success=True)
+        self.cfg = MissionConfig(grip_ball_min_pct=20.0, grip_ball_max_pct=40.0, track_period=0.1,
+                                 load_retry_wait_seconds=1.0, load_leave_timeout=10.0, place_servo_gain_deg_per_px=0.04)
+        self.link = FakeLoadLink()
+        self.events = []
+
+    def build(self, **world_kw):
+        self.world = World(self.link, **world_kw)
+        self.arm = FakeArm(self.world)
+        self.eye = FakeEye(self.world, self.arm)
+        self.ops = WorldOps(self.world, self.arm, self.events)
+        loader = Loader(self.cfg, self.arm, self.eye, self.link, self.book, clock=self.world.clock, sleep=self.world.sleep,
+                        log=lambda event, **kw: self.events.append((event, kw)), places=self.places, ops=self.ops)
+        loader.max_wait = 60
+        return loader
+
+    def names(self):
+        return [e for e, _ in self.events]
+
+    def test_full_cycle_stops_as_soon_as_car_and_box_are_seen(self):
+        loader = self.build(note="red")
+        loader.run(max_jobs=1)
+        self.assertEqual(self.link.states(), ["WAITING", "STOP_REQUEST", "IN_PROGRESS", "SUCCESS", "WAITING"])
+        self.assertNotIn("TRACKING", self.link.states())                      # 따라가지 않고 보이면 바로 정지
+        self.assertEqual(self.world.loaded, "red")
+        self.assertEqual(self.arm.went[-1], "watch")                          # 대기 자세로 돌아간 뒤 출발 신호
+
+    def test_failure_waits_for_the_ball_then_picks_again(self):
+        loader = self.build(note="blue")
+        self.ops.miss = [True]
+        loader.run(max_jobs=1)
+        attempts = [h["attempt"] for h in self.link.history if h["state"] == "IN_PROGRESS"]
+        self.assertEqual(attempts, [1, 2])
+        self.assertEqual([kw["color"] for e, kw in self.events if e == "ops_pick"], ["blue", "blue"])   # 4(공 집기)부터 다시
+        self.assertEqual(self.link.states()[-2], "SUCCESS")
+
+    def test_three_failures_send_failed(self):
+        loader = self.build()
+        self.ops.miss = [True, True, True]
+        loader.run(max_jobs=1)
+        attempts = [h["attempt"] for h in self.link.history if h["state"] == "IN_PROGRESS"]
+        self.assertEqual(attempts, [1, 2, 3])
+        self.assertEqual(self.link.states()[-2], "FAILED")
+        self.assertIsNone(self.world.loaded)
+
+    def test_waits_for_car_power_before_going_to_the_wait_pose(self):
+        loader = self.build(start=200.0)
+        self.world.present = False                                             # 차 전원이 아직 꺼져 있음
+        loader.wait_car_power = True
+        loader.max_wait = 3
+        with self.assertRaises(TimeoutError):                                  # 차가 안 켜졌으면 계속 기다린다
+            loader.boot()
+        self.assertEqual(self.arm.went, [])
+        self.link.on_car("IDLE")                                               # 차 전원 켜짐 → 첫 상태 메시지
+        loader.boot()
+        self.assertEqual(self.arm.went, ["watch"])
+
+    def test_missing_place_learning_blocks_start(self):
+        self.places.delete_set(self.places.chosen_set())
+        loader = self.build()
+        with self.assertRaises(LoadAbort) as ctx:
+            loader.run(max_jobs=1)
+        self.assertIn("4번", str(ctx.exception))
+        self.assertFalse(self.arm.torque)
+
+
+class InterfaceTest(unittest.TestCase):
     def test_message_numbers_match_team_interface(self):
         self.assertEqual(ARM_STATES.index("STOP_REQUEST"), 2)
         self.assertEqual(ARM_STATES.index("SUCCESS"), 4)

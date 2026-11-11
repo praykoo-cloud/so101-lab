@@ -134,6 +134,15 @@ class MissionConfig:
     load_verify_hits: int = 3                # 그동안 이만큼 넘게 보여야 성공
     load_retry_wait_seconds: float = 5.0     # 실패 후 다음 시도 전에 기다리는 시간 (떨어진 공을 사람이 제자리에 놓는 시간)
     load_leave_timeout: float = 30.0         # 결과를 알린 뒤 차가 떠나기를 기다리는 최대 시간
+    load_see_frames: int = 3                 # 차 + 상자가 연속 이만큼 보이면 바로 정지 신호 (한 장 잘못 본 것에 속지 않게)
+    load_use_tracking: bool = False          # 켜면 예전 방식 (받침을 돌려 차를 따라가다 기준 각도에서 정지 신호)
+    load_wait_car_power: bool = True         # 상차 미션: 차의 첫 상태 메시지(차 전원 켜짐)를 받은 뒤 대기 자세로 간다
+    # 바구니 넣기 (허브 4번 학습 · 실시간 맞추기)
+    place_servo_gain_deg_per_px: float = 0.03   # 바구니가 학습 자리에서 1픽셀 벗어날 때 돌릴 각도
+    place_servo_deadband_px: float = 15.0       # 학습 자리에서 이 안이면 '맞췄다'
+    place_servo_max_deg: float = 15.0           # 학습 자세에서 관절마다 이만큼까지만 더 움직인다 (안전)
+    place_servo_seconds: float = 8.0            # 이 시간 안에 못 맞추면 그 시도는 실패
+    place_servo_tilt_sign: int = 0              # 세로 맞추기 (어깨 2번): 0 = 안 함, 1 / -1 = 방향
     # 통신
     state_hz: float = 1.0                    # 상태 메시지를 이 주기로 계속 발행
     ros_domain_note: str = "팀 전용 ROS_DOMAIN_ID 를 환경변수로 설정 (두 Pi 같은 값)"
