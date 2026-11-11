@@ -111,8 +111,8 @@ def ik_down(target, q0, iters: int = 300, tol: float = 0.001, lean: float = 0.0)
 class Reach:
     """ops(ArmOps 또는 시험용 가짜 팔) 로 손끝을 좌표로 움직인다. 집게 기울기는 lean 으로 고정 (학습한 5 자세에서 잼)"""
 
-    def __init__(self, ops, lean: float = 0.0):
-        self.ops, self.lean = ops, lean
+    def __init__(self, ops, lean: float = 0.0, speed: int | None = None):
+        self.ops, self.lean, self.speed = ops, lean, speed
 
     def now(self) -> tuple[np.ndarray, list[float]]:
         """(지금 손끝 위치 m, 지금 URDF 각도)"""
@@ -128,5 +128,8 @@ class Reach:
             x, y, z = (float(v) for v in xyz)
             raise ReachError(f"팔이 거기까지 닿지 않아요 (받침에서 앞으로 {x * 1000:.0f} mm · 옆으로 {y * 1000:.0f} mm · 높이 {z * 1000:.0f} mm). "
                              "관절(주로 손목)이 더 꺾이지 않는 자리예요")
-        self.ops.move_to(angles_from_urdf(q))
+        if self.speed:
+            self.ops.move_to(angles_from_urdf(q), speed=self.speed)
+        else:
+            self.ops.move_to(angles_from_urdf(q))
         return q

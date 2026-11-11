@@ -126,8 +126,8 @@ class ArmOps:
     def grip_pct(self):
         return self.robot.gripper_percent()
 
-    def move_to(self, angles: dict, timeout: float = 12.0) -> bool:
-        self.robot.move_all({int(j): float(v) for j, v in angles.items()}, speed=self.cfg.speed_slow)
+    def move_to(self, angles: dict, timeout: float = 12.0, speed: int | None = None) -> bool:
+        self.robot.move_all({int(j): float(v) for j, v in angles.items()}, speed=speed or self.cfg.speed_slow)
         return self.robot.wait_until_settled(timeout=timeout)
 
     def nudge(self, joint: str, deg: float) -> None:
@@ -693,7 +693,9 @@ class PlaceRunner:
                 new = max(final_lean, old - lean_step)
                 goal = xyz.copy()
                 if area < cfg.seek_area and not stuck_down:
-                    goal[2] -= cfg.seek_down_mm / 1000.0
+                    # 목표 비율에 가까울수록 조금씩 (넓이는 거리의 제곱에 반비례 → 남은 거리 ≈ 1 - √(지금/목표))
+                    left = 1.0 - math.sqrt(max(area, 1e-4) / cfg.seek_area)
+                    goal[2] -= cfg.seek_down_mm / 1000.0 * max(0.15, min(1.0, 2.0 * left))
                     if (start[2] - goal[2]) * 1000 > cfg.seek_max_drop_mm:
                         stuck_down = True
                         goal = xyz.copy()
@@ -726,7 +728,7 @@ class PlaceRunner:
         cfg = self.cfg
         report = on_step or (lambda *a: None)
         wait = before or (lambda n: None)
-        reach = Reach(self.ops, lean_of(urdf_from_angles(self.ops.angles())))
+        reach = Reach(self.ops, lean_of(urdf_from_angles(self.ops.angles())), speed=cfg.seek_speed)
         lean0 = reach.lean                                    # 시작(대기) 자세의 기울기
         q = reach.now()[1]
         if start <= 6:
@@ -747,7 +749,7 @@ class PlaceRunner:
         if start <= 8:
             wait(8)
             tip, q = reach.now()
-            n = 3
+            n = 2
             up = 0.0
             step_lean = math.sin(math.radians(cfg.seek_tilt_step_deg))
             for i in range(1, n + 1):

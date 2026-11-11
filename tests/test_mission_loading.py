@@ -329,7 +329,7 @@ class WorldOps:
     def grip_pct(self):
         return self.arm.grip
 
-    def move_to(self, angles, timeout=12.0):
+    def move_to(self, angles, timeout=12.0, speed=None):
         self.a.update({j: float(v) for j, v in angles.items()})
         self.arm.pan = self.a["1"]
         self.world.sleep(0.5)

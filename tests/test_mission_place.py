@@ -129,9 +129,10 @@ class FakeOps:
     def grip_pct(self):
         return self.gripper
 
-    def move_to(self, angles, timeout=12.0):
+    def move_to(self, angles, timeout=12.0, speed=None):
         self.a.update({j: float(v) for j, v in angles.items()})
         self.moves += 1
+        self.speed = speed
         return True
 
     def nudge(self, joint, deg):
@@ -749,7 +750,8 @@ class SeekTest(unittest.TestCase):
         self.assertTrue(ok, seen)
         self.assertEqual([(n, k) for n, k, _ in seen], [(5, True), (6, True), (7, True), (8, True), (9, True)])
         x, y, w, h, depth = self.released_at
-        self.assertGreaterEqual(w * h / (640 * 480), 0.5)                          # 화면의 50% 이상
+        self.assertGreaterEqual(w * h / (640 * 480), self.cfg.seek_area)            # 화면의 75% 이상
+        self.assertLess(w * h / (640 * 480), 0.85)                                  # 너무 가까이 가지 않음
         self.assertLess(abs(x + w / 2 - 320), 40)                                   # 바구니가 화면 가운데
         self.assertLess(abs(y + h / 2 - 240), 40)
         import math
