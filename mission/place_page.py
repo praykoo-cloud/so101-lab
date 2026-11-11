@@ -88,6 +88,7 @@ class PlaceSession:
         st["grip"] = None if grip is None else round(grip, 1)
         st["book"] = self.book.summary()
         st["fake"] = not getattr(self.robot, "real", True)
+        st["yolo"] = bool(self.cfg.place_use_yolo)
         return st
 
     def log(self, event, **kw):
@@ -396,24 +397,58 @@ class PlaceSession:
         self._result(4, ok, why + tail)
 
     def _auto(self, runner: PlaceRunner, learned: dict, start: int, maybe_pause) -> bool:
-        corr = {j: 0.0 for j in ("1", "2", "3", "4", "5")}
+        """5~9 자동. YOLO 넣기(카메라 방향을 잰 세트) 또는 저장 자세 방식"""
+        yolo = runner.yolo_ready(learned)
         if start <= 5:
             maybe_pause(5)
-            self._say(5, "학습한 바구니 위 자세로 가서 바구니에 맞추는 중…")
-            corr, why = runner.step_above(learned)
-            self._result(5, corr is not None, why)
-            if corr is None:
+            if yolo:
+                self._say(5, "YOLO 로 바구니를 보며 집게를 바로 위로 맞추는 중…")
+                state, why = runner.yolo_above(learned)
+            else:
+                self._say(5, "학습한 바구니 위 자세로 가서 바구니에 맞추는 중…")
+                state, why = runner.step_above(learned)
+            self._result(5, state is not None, why)
+            if state is None:
                 return False
-        for num, fn in ((6, runner.step_inside), (7, runner.step_release), (8, runner.step_lift), (9, runner.step_check)):
+        else:
+            state = runner.yolo_here(learned, start) if yolo else {j: 0.0 for j in ("1", "2", "3", "4", "5")}
+        steps = runner.yolo_steps(learned, state) if yolo else runner.pose_steps(learned, state)
+        for num, fn in steps:
             if num < start:
                 continue
             maybe_pause(num)
             self._say(num, f"{num} {STEP_TITLES[num]} 하는 중…")
-            ok, why = fn(learned, corr)
+            ok, why = fn()
             self._result(num, ok, why)
             if not ok:
                 return False
         return True
+
+    # ── 카메라 방향 재기 (YOLO 넣기 준비, 세트마다 한 번) ───────────────
+    def measure_cam(self, sid: str) -> str:
+        self._need_idle()
+        learned = self.book.learned(sid)
+        if not learned.get("target"):
+            raise PlaceError("5 바구니 위를 저장할 때 바구니가 보인 ✔ 회차가 있어야 해요 (바구니 목표 자리).")
+        if self.ops.too_hot():
+            raise PlaceError("모터가 뜨거워요. 식힌 뒤에 다시 하세요.")
+        self.reset_status()
+        self.status.update(mode="cam", set=sid)
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._guard, args=(self._run_cam, sid, learned, 5, False), daemon=True)
+        self._thread.start()
+        return "카메라 방향을 재기 시작했어요. 팔이 바구니 위에서 앞뒤 · 좌우로 조금씩 움직여요."
+
+    def _run_cam(self, sid, learned, _start, _pause):
+        runner = self._runner()
+        self.ops.torque_arm(True)
+        self.status["arm_torque"] = True
+        self._say(5, "카메라 방향을 재는 중… (학습한 5 바구니 위 자세 → 집게를 아래로 → 앞뒤 · 좌우로 조금씩)")
+        cam = runner.measure_camera(learned)
+        self.book.set_cam(sid, cam)
+        m = cam["m"]
+        per_cm = (abs(m[0][0]) + abs(m[1][0]) + abs(m[0][1]) + abs(m[1][1])) / 2 / 100
+        self._result(5, True, f"카메라 방향을 쟀어요 (손끝 1 cm ≈ 화면 {per_cm:.0f} 픽셀). 이제 테스트 · 상차 미션이 YOLO 넣기로 해요.")
 
     # ── 버튼 ────────────────────────────────────────────────────────────
     def handle(self, action: str, data: dict) -> str:
@@ -462,6 +497,8 @@ class PlaceSession:
             return "팔(1~5번)에 힘을 줬어요. 손을 떼도 돼요." if on else "팔(1~5번) 힘을 뺐어요. 손으로 받치세요! (집게는 그대로)"
         if action == "grip":
             return self._grip(data)
+        if action == "cam-measure":
+            return self.measure_cam(str(data.get("sid")))
         if action == "draft-clear":
             self._need_idle()
             self.draft, self.images = {}, {}
@@ -616,6 +653,7 @@ def place_body() -> str:
   <h2>테스트</h2>
   <p><select id=from aria-label='테스트 시작 단계'>{test_opts}</select> <select id=color aria-label='테스트 공 색'>{color_opts}</select>
      <label><input type=checkbox id=pause> 한 단계씩 멈추기</label> <button id=test>▶ 테스트</button></p>
+  <p><button class=sec id=cammeasure>카메라 방향 재기 (YOLO 넣기 준비)</button> <span class=small id=camdir></span></p>
   <p class=small>학습한 ✔ 회차들의 평균으로 자동 실행해요. '포스트잇 읽기 (자동)' 이면 포스트잇 색을 읽고 그 색 공(빨강 = 빨간공_집기, 파랑 = 파란공_집기)을 집어요.
      5 이후부터 시작하면 팔이 공을 쥐고 있어야 하고 공 색을 골라야 해요.</p>
  </div>
@@ -698,6 +736,8 @@ function render(d){S=d;const b=d.book;const sel=$('set');const keep=sel.value;
  const moving=run&&!w;
  document.querySelectorAll('[data-save]').forEach(x=>x.disabled=run?w!=='teach'+x.dataset.save:!set);
  ['armoff','armon','grip'].forEach(i=>$(i).disabled=moving);document.querySelectorAll('[data-grip]').forEach(x=>x.disabled=moving);
+ $('cammeasure').disabled=run||!set||!set.used;
+ $('camdir').textContent=!set?'':!d.yolo?'넣기 방식: 저장 자세 (설정에서 YOLO 넣기를 꺼 둠)':set.cam?'넣기 방식: YOLO 맞추기 · 카메라 방향 잰 때 '+set.cam.t:'넣기 방식: 저장 자세 (카메라 방향을 재면 YOLO 맞추기로 바뀌어요)';
  const dr=d.draft||{},have=Object.keys(NAMES).filter(k=>dr[k]).length;
  $('draftclear').disabled=run||!have;$('takesave').disabled=run||!set||have<5;$('tresult').disabled=run;
  $('teachhint').textContent=run?(w.startsWith('teach')?'학습 중: 지금은 '+w.slice(5)+'단계 차례예요. 팔을 옮긴 뒤 [+ '+w.slice(5)+' … 저장] 을 누르세요. 저장하면 다음 단계로 넘어가요.':'학습 · 테스트가 도는 중이에요. 가르칠 차례가 오면 저장 버튼이 켜져요.')
@@ -729,6 +769,7 @@ function bindTakes(run){
  document.querySelectorAll('[data-rename]').forEach(x=>x.onclick=()=>{const n=prompt('새 회차 이름 (1~30자)');if(n)post('take-rename',{sid:sid(),tid:x.dataset.rename,label:n})});
  document.querySelectorAll('[data-del]').forEach(x=>x.onclick=()=>{if(confirm('이 회차를 지울까요? (백업이 남아요)'))post('take-delete',{sid:sid(),tid:x.dataset.del})});
  const wr=$('watchredo');if(wr){wr.disabled=run;wr.onclick=()=>{if(confirm('지금 팔 자세와 카메라 사진을 이 세트의 대기 자세로 다시 저장할까요?'))post('watch-redo',{sid:sid()})}}}
+$('cammeasure').onclick=()=>{if(confirm('팔이 학습한 5 바구니 위 자세로 가서 집게를 아래로 향한 뒤 앞뒤 · 좌우로 조금씩 움직여요. 바구니가 카메라에 보이나요? 주변을 비웠나요?'))post('cam-measure',{sid:sid()})};
 $('draftclear').onclick=()=>{if(confirm('지금 묶음(5~9 저장한 것)을 모두 비울까요?'))post('draft-clear')};
 $('takesave').onclick=()=>post('take-save',{sid:sid(),label:$('tname').value,success:$('tresult').value==='ok'}).then(ok=>{if(ok)$('tname').value=''});
 async function refresh(){try{render(await (await fetch('/api/place/state',{cache:'no-store'})).json())}catch(e){say('허브와 연결이 끊겼어요. 허브가 켜져 있는지 확인하세요.',false)}}

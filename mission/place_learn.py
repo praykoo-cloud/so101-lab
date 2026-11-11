@@ -250,6 +250,12 @@ class PlaceBook:
         self.save()
         return saved
 
+    def set_cam(self, sid: str, cam: dict) -> None:
+        """카메라 방향 재기 결과 (손끝 1 m 움직임당 바구니가 화면에서 움직이는 픽셀 2×2)"""
+        entry = self.get_set(sid)
+        entry["cam"] = dict(cam, t=now_text())
+        self.save()
+
     def latest_success(self, sid: str) -> tuple[str, dict] | None:
         """가장 최근의 성공 회차 (tid, 회차). 없으면 None. 6~8 부터 학습할 때 앞 단계 값을 여기서 빌린다"""
         takes = [(tid, t) for tid, t in self.get_set(sid)["takes"].items() if t.get("success")]
@@ -284,6 +290,7 @@ class PlaceBook:
                 "cy": round(sum(b["cy"] for b in targets) / len(targets), 1),
                 "w": round(sum(b["w"] for b in targets) / len(targets), 1)},
             "release_grip": None if not grips else round(sum(grips) / len(grips), 1),
+            "cam": entry.get("cam"),
         }
 
     @staticmethod
@@ -302,5 +309,6 @@ class PlaceBook:
                      for tid, t in entry["takes"].items()]
             out.append({"id": sid, "label": entry["label"], "created": entry["created"],
                         "chosen": self.data.get("chosen") == sid, "watch": entry.get("watch"), "takes": takes,
+                        "cam": entry.get("cam"),
                         "used": sum(1 for t in takes if t["use"])})
         return {"sets": out, "chosen": self.data.get("chosen"), "steps": STEP_LABELS}

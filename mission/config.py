@@ -143,7 +143,15 @@ class MissionConfig:
     place_servo_deadband_px: float = 15.0       # 학습 자리에서 이 안이면 '맞췄다'
     place_servo_max_deg: float = 15.0           # 학습 자세에서 관절마다 이만큼까지만 더 움직인다 (안전)
     place_servo_seconds: float = 8.0            # 이 시간 안에 못 맞추면 그 시도는 실패
-    place_servo_tilt_sign: int = 0              # 세로 맞추기 (어깨 2번): 0 = 안 함, 1 / -1 = 방향
+    place_servo_tilt_sign: int = 0              # 세로 맞추기 (어깨 2번): 0 = 안 함, 1 / -1 = 방향 ('저장 자세' 방식에서만)
+    # YOLO 넣기 (5 바구니 위를 YOLO 로 맞추고, 6 은 수직으로 내려가고, 8 은 수직으로 올라온다)
+    place_use_yolo: bool = True                 # 켜면 YOLO 넣기, 끄면 예전 '저장 자세' 방식 (학습한 모터 값 평균)
+    place_step_mm: float = 10.0                 # 맞출 때 손끝을 한 번에 최대 이만큼(mm) 옮긴다
+    place_max_shift_mm: float = 80.0            # 학습한 5 자리에서 이만큼(mm) 넘게 옮겨야 하면 실패 (안전)
+    place_yolo_gain: float = 0.8                # 한 번에 남은 거리의 몇 배를 옮길지 (1 = 한 번에 다, 작을수록 천천히)
+    place_calib_mm: float = 15.0                # 카메라 방향 재기: 앞뒤 · 좌우로 이만큼(mm) 움직여 본다
+    place_extra_down_mm: float = 20.0           # 6 내려가기: 학습한 6 높이보다 이만큼 더 낮게는 절대 안 간다 (안전)
+    place_down_steps: int = 3                   # 6 내려가기 / 8 올라오기를 몇 번에 나눠서 할지
     # 통신
     state_hz: float = 1.0                    # 상태 메시지를 이 주기로 계속 발행
     ros_domain_note: str = "팀 전용 ROS_DOMAIN_ID 를 환경변수로 설정 (두 Pi 같은 값)"

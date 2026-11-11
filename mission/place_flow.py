@@ -7,8 +7,15 @@
   5 바구니 위 (학습한 자세로 간 뒤, 바구니가 학습 때와 같은 자리에 보이도록 조금씩 맞춤 = 실시간 맞추기)
   6 바구니 안 (5 에서 맞춘 만큼 더해서)
   7 집게 해제 (학습한 % 만큼 열기)
-  8 성공 확인 자세 → '공이 든 상자' 가 보이면 성공
-  9 성공: 대기 자세 → 출발 신호(SUCCESS)      10 실패: 4 부터 다시 (3번째 실패면 FAILED)
+  8 들어올리기 (집게를 연 채로)
+  9 성공 확인 자세 → '공이 든 상자' 가 보이면 성공
+  10 성공: 대기 자세 → 출발 신호(SUCCESS)      11 실패: 4 부터 다시 (3번째 실패면 FAILED)
+
+넣기 방식 두 가지 (설정 place_use_yolo)
+  YOLO 넣기 (기본): 5 = 집게를 아래로 향하고 손끝을 앞뒤 · 좌우로 옮겨 바구니를 학습한 픽셀 자리에 맞춤 (높이는 학습한 5 높이),
+                    6 = 그 자리에서 학습한 깊이(5 와 6 의 높이 차)만큼 수직으로 내려감, 8 = 수직으로 다시 올라옴.
+                    세트마다 한 번 '카메라 방향 재기' 가 필요하다 (measure_camera)
+  저장 자세       : 학습한 모터 값 평균 + 받침 보정 (예전 방식, 카메라 방향 값이 없으면 자동으로 이 방식)
 
 고칠 숫자: 허브 6번 설정의 '바구니 넣기 (4번)' 묶음 (맞추기 세기 · 허용 폭 · 최대 보정 각도 …)
 
@@ -25,6 +32,7 @@ from dataclasses import dataclass
 
 from .m3_pick_place import band_ok
 from .motions import MotionError, play
+from .place_reach import Reach, ReachError, tip_of
 from .yolo import BASKET_NAMES, pick_best
 
 PICK_MOTION = {"red": "빨간공_집기", "blue": "파란공_집기"}
@@ -332,15 +340,191 @@ class PlaceRunner:
             self.sleep(0.1)
         return False
 
+    # ── YOLO 넣기 ───────────────────────────────────────────────────────
+    def yolo_ready(self, learned: dict) -> bool:
+        """YOLO 넣기를 쓸 수 있나 (설정이 켜져 있고, 카메라 방향 · 바구니 목표 자리가 있다)"""
+        return bool(self.cfg.place_use_yolo and learned.get("cam") and learned.get("target"))
+
+    def _box_px(self, frames: int = 3) -> tuple[float, float] | None:
+        """바구니 가운데 픽셀 (여러 장 평균). 못 찾으면 None"""
+        xs, ys = [], []
+        for _ in range(frames * 3):
+            self.check()
+            seen = self.eye.look()
+            box = pick_best(seen.dets, BASKET_NAMES) if seen else None
+            if box is not None:
+                xs.append(box.cx)
+                ys.append(box.cy)
+                if len(xs) >= frames:
+                    break
+            self.sleep(0.05)
+        if not xs:
+            return None
+        return sum(xs) / len(xs), sum(ys) / len(ys)
+
+    def measure_camera(self, learned: dict) -> dict:
+        """카메라 방향 재기: 바구니 위에서 손끝을 앞뒤 · 좌우로 조금 움직여 보고 바구니가 화면에서 얼마나 움직이는지 잰다.
+        반환 {"m": [[px/m, px/m], [px/m, px/m]], "z": 높이 m}. 실패하면 ReachError"""
+        reach = Reach(self.ops)
+        self.check()
+        self.ops.move_to(learned["poses"]["above"])
+        tip, q = reach.now()
+        q = reach.go(tip, q)                                  # 같은 자리에서 집게를 아래로
+        d = self.cfg.place_calib_mm / 1000.0
+        p0 = self._box_px()
+        if p0 is None:
+            raise ReachError("바구니가 카메라에 보이지 않아요. 바구니가 보이는 곳에서 다시 재세요")
+        cols = []
+        for axis in (0, 1):
+            moved = tip.copy()
+            moved[axis] += d
+            reach.go(moved, q)
+            p1 = self._box_px()
+            reach.go(tip, q)
+            if p1 is None:
+                raise ReachError("움직여 보는 동안 바구니가 화면에서 사라졌어요. 재는 거리(place_calib_mm)를 줄이세요")
+            cols.append(((p1[0] - p0[0]) / d, (p1[1] - p0[1]) / d))
+        m = [[cols[0][0], cols[1][0]], [cols[0][1], cols[1][1]]]
+        det = m[0][0] * m[1][1] - m[0][1] * m[1][0]
+        if abs(det) < 1e3:                                    # 거의 안 움직였다 (1 cm 에 몇 픽셀도 안 됨)
+            raise ReachError("손끝을 움직여도 바구니가 화면에서 거의 안 움직였어요. 카메라 · 바구니 위치를 확인하세요")
+        self.log("camera_measured", m=[[round(v) for v in row] for row in m])
+        return {"m": [[round(v, 1) for v in row] for row in m], "z": round(float(tip[2]), 4)}
+
+    def yolo_above(self, learned: dict) -> tuple[dict | None, str]:
+        """5) 학습한 5 자세로 간 뒤, 집게를 아래로 향하고 손끝을 옮겨 바구니를 목표 픽셀 자리에 맞춘다.
+        성공하면 (상태, 설명). 상태 = {"xyz": 맞춘 손끝 위치, "q": URDF 각도, "corr": 받침 보정}"""
+        cfg = self.cfg
+        reach = Reach(self.ops)
+        base = learned["poses"]["above"]
+        target, cam = learned["target"], learned["cam"]
+        m = cam["m"]
+        det = m[0][0] * m[1][1] - m[0][1] * m[1][0]
+        inv = [[m[1][1] / det, -m[0][1] / det], [-m[1][0] / det, m[0][0] / det]]
+        self.check()
+        self.ops.move_to(base)
+        start, q = reach.now()
+        try:
+            q = reach.go(start, q)                            # 같은 자리에서 집게를 아래로
+        except ReachError as e:
+            return None, str(e)
+        xyz = start.copy()
+        t0 = self.clock()
+        missed = 0
+        while True:
+            self.check()
+            if self.clock() - t0 > cfg.place_servo_seconds:
+                return None, f"{cfg.place_servo_seconds:g}초 안에 바구니 위로 맞추지 못했어요"
+            seen = self.eye.look()
+            box = pick_best(seen.dets, BASKET_NAMES) if seen else None
+            if box is None:
+                missed += 1
+                if missed >= 10:
+                    return None, "바구니(상자)가 카메라에 보이지 않아요"
+                self.sleep(cfg.track_period)
+                continue
+            missed = 0
+            ex, ey = box.cx - target["cx"], box.cy - target["cy"]
+            if abs(ex) <= cfg.place_servo_deadband_px and abs(ey) <= cfg.place_servo_deadband_px:
+                corr = {j: round(v - base[j], 2) for j, v in self.ops.angles().items()}
+                self.log("yolo_above_ok", ex=round(ex), ey=round(ey), xyz=[round(float(v), 3) for v in xyz])
+                return {"xyz": xyz, "q": q, "corr": corr}, f"바구니 위로 맞췄어요 (가로 {ex:+.0f}, 세로 {ey:+.0f} 픽셀 차이)"
+            dx = -(inv[0][0] * ex + inv[0][1] * ey) * cfg.place_yolo_gain      # 손끝을 옮길 거리 (m)
+            dy = -(inv[1][0] * ex + inv[1][1] * ey) * cfg.place_yolo_gain
+            size = math.hypot(dx, dy)
+            limit = cfg.place_step_mm / 1000.0
+            if size > limit:
+                dx, dy = dx * limit / size, dy * limit / size
+            goal = xyz.copy()
+            goal[0] += dx
+            goal[1] += dy
+            if math.hypot(goal[0] - start[0], goal[1] - start[1]) * 1000 > cfg.place_max_shift_mm:
+                return None, (f"바구니에 맞추려면 학습한 5 자리에서 {cfg.place_max_shift_mm:g} mm 넘게 옮겨야 해서 멈췄어요 "
+                              "(차가 너무 벗어나 섰거나 카메라 방향을 다시 재야 할 수 있어요)")
+            try:
+                q = reach.go(goal, q)
+            except ReachError as e:
+                return None, str(e)
+            xyz = goal
+
+    def yolo_here(self, learned: dict, start: int) -> dict:
+        """6 이후부터 시작할 때: 지금 손끝을 기준으로 상태를 만든다 (6 = 지금이 바구니 위, 7 이후 = 지금이 바구니 안)"""
+        tip, q = Reach(self.ops).now()
+        xyz = tip.copy()
+        if start >= 7:
+            xyz[2] += self.depth(learned)
+        corr = {j: round(v - learned["poses"]["above"][j], 2) for j, v in self.ops.angles().items()}
+        return {"xyz": xyz, "q": q, "corr": corr}
+
+    def depth(self, learned: dict) -> float:
+        """학습한 5(바구니 위)와 6(바구니 안)의 손끝 높이 차 (m)"""
+        return max(0.0, float(tip_of(learned["poses"]["above"])[2] - tip_of(learned["poses"]["inside"])[2]))
+
+    def _vertical(self, state: dict, z_from: float, z_to: float) -> None:
+        reach = Reach(self.ops)
+        n = max(1, int(self.cfg.place_down_steps))
+        q = state["q"]
+        for i in range(1, n + 1):
+            self.check()
+            goal = state["xyz"].copy()
+            goal[2] = z_from + (z_to - z_from) * i / n
+            q = reach.go(goal, q)
+        state["q"] = q
+
+    def yolo_down(self, learned: dict, state: dict) -> tuple[bool, str]:
+        """6) 맞춘 자리에서 학습한 깊이만큼 수직으로 내려간다"""
+        depth = self.depth(learned)
+        floor = float(tip_of(learned["poses"]["inside"])[2]) - self.cfg.place_extra_down_mm / 1000.0
+        z_top = float(state["xyz"][2])
+        z_to = max(z_top - depth, floor)
+        try:
+            self._vertical(state, z_top, z_to)
+        except ReachError as e:
+            return False, str(e)
+        return True, f"바구니 안으로 {(z_top - z_to) * 1000:.0f} mm 수직으로 내려갔어요"
+
+    def release_here(self, learned: dict, corr: dict | None = None) -> tuple[bool, str]:
+        """7) 그 자리에서 집게만 연다"""
+        self.check()
+        pct = learned.get("release_grip")
+        if pct is None:
+            pct = self.cfg.grip_open_pct
+        self.ops.grip(pct)
+        return True, f"집게를 {pct:g}% 로 열었어요"
+
+    def yolo_lift(self, learned: dict, state: dict) -> tuple[bool, str]:
+        """8) 집게를 연 채로 5 의 높이까지 수직으로 올라온다"""
+        z_now = float(Reach(self.ops).now()[0][2])
+        try:
+            self._vertical(state, z_now, float(state["xyz"][2]))
+        except ReachError as e:
+            return False, str(e)
+        return True, "집게를 연 채로 수직으로 들어 올렸어요"
+
+    def yolo_steps(self, learned: dict, state: dict):
+        """6 · 7 · 8 · 9 (번호, 실행 함수) — YOLO 넣기"""
+        return ((6, lambda: self.yolo_down(learned, state)), (7, lambda: self.release_here(learned)),
+                (8, lambda: self.yolo_lift(learned, state)), (9, lambda: self.step_check(learned, state["corr"])))
+
+    def pose_steps(self, learned: dict, corr: dict):
+        """6 · 7 · 8 · 9 (번호, 실행 함수) — 저장 자세 방식"""
+        return ((6, lambda: self.step_inside(learned, corr)), (7, lambda: self.step_release(learned, corr)),
+                (8, lambda: self.step_lift(learned, corr)), (9, lambda: self.step_check(learned, corr)))
+
     def auto_place(self, learned: dict, on_step=None) -> tuple[bool, str]:
         """5 → 6 → 7 → 8 → 9 자동. on_step(번호, 성공?, 설명) 을 단계마다 부른다"""
-        corr, why = self.step_above(learned)
+        if self.yolo_ready(learned):
+            state, why = self.yolo_above(learned)
+            steps = None if state is None else self.yolo_steps(learned, state)
+        else:
+            state, why = self.step_above(learned)
+            steps = None if state is None else self.pose_steps(learned, state)
         if on_step:
-            on_step(5, corr is not None, why)
-        if corr is None:
+            on_step(5, state is not None, why)
+        if state is None:
             return False, why
-        for num, fn in ((6, self.step_inside), (7, self.step_release), (8, self.step_lift), (9, self.step_check)):
-            ok, why = fn(learned, corr)
+        for num, fn in steps:
+            ok, why = fn()
             if on_step:
                 on_step(num, ok, why)
             if not ok:

@@ -430,6 +430,11 @@ class SessionTest(unittest.TestCase):
         self.s._thread.join(5)
         self.assertEqual(self.ops.picked[0], "blue")                       # 포스트잇은 빨강이지만 고른 파랑으로
 
+    def test_camera_direction_needs_a_learned_take(self):
+        with self.assertRaises(PlaceError):
+            self.s.handle("cam-measure", {"sid": self.sid})                # ✔ 회차가 없으면 못 잰다
+        self.assertFalse(self.s.state()["book"]["sets"][0]["cam"])
+
     def test_start_rules(self):
         with self.assertRaises(PlaceError):
             self.s.start("learn", self.sid, self.link, 7, "red")           # 빌려 올 성공 회차가 없음
@@ -488,6 +493,115 @@ class SessionTest(unittest.TestCase):
         self.assertEqual(results, [(5, True), (6, True), (7, True), (8, True), (9, True), (10, True)])
         self.assertEqual(self.ops.picked, [])                             # 5부터면 집기는 건너뜀
         self.assertEqual(self.link.states(), ["IN_PROGRESS", "SUCCESS"])
+
+
+
+class KinOps(FakeOps):
+    """가짜 팔 (모터 각도를 그대로 기억). 손끝 위치는 진짜 기구학(FK)으로 계산된다"""
+
+    def __init__(self, a):
+        super().__init__()
+        self.a = dict(a)
+        self.gripper = 30.0
+
+    def nudge(self, joint, deg):
+        self.a[joint] = deg
+
+
+class XYEye:
+    """손목 카메라 흉내: 집게가 아래를 보고 있으면 바구니가 손끝과 어긋난 만큼 화면에서 움직여 보인다 (1 cm = 20 픽셀)"""
+    PX_PER_M = 2000.0
+
+    def __init__(self, ops, basket_xyz):
+        self.ops, self.basket = ops, basket_xyz
+        self.loaded = False
+        self.release_xy = None
+
+    def tip(self):
+        from mission.place_reach import tip_of
+        return tip_of(self.ops.a)
+
+    def look(self):
+        t = self.tip()
+        cx = 320 - self.PX_PER_M * (self.basket[1] - t[1])
+        cy = 240 - self.PX_PER_M * (self.basket[0] - t[0])
+        dets = []
+        if 0 <= cx <= 640 and 0 <= cy <= 480:
+            dets.append(Det("success_red" if self.loaded else "box", 0.9, cx - 40, cy - 30, 80, 60))
+        return Seen(dets, WIDTH)
+
+
+class YoloPlaceTest(unittest.TestCase):
+    """YOLO 넣기: 차가 학습 때보다 3 cm · 2 cm 어긋나 서도 바구니 위로 맞추고, 수직으로 내려가 놓고, 올라온다"""
+
+    def setUp(self):
+        import numpy as np
+        from mission.place_reach import angles_from_urdf, ik_down, tip_of, urdf_from_angles
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        self.book = PlaceBook(root / "place.json", root / "img", root / "backup")
+        self.sid = self.book.create_set("a")
+        above = {"1": 0.0, "2": -30.0, "3": 40.0, "4": 70.0, "5": -90.0}
+        tip = tip_of(above)
+        q_in = ik_down(tip - np.array([0, 0, 0.04]), urdf_from_angles(above))
+        inside = angles_from_urdf(q_in)                                           # 학습 때 4 cm 아래로
+        def snap5(a, basket=None, grip=30.0):
+            return make_snap(a, grip, basket, None)
+        target = {"name": "box", "conf": 0.9, "cx": 320.0, "cy": 240.0, "w": 80.0, "h": 60.0}
+        self.book.add_take(self.sid, {"above": snap5(above, target), "inside": snap5(inside), "release": snap5(inside, grip=80.0),
+                                      "lift": snap5(above, grip=80.0), "check": snap5(above)}, {}, success=True)
+        self.learned = self.book.learned(self.sid)
+        self.tip0 = tip
+        self.ops = KinOps(above)
+        self.basket = (float(tip[0]) + 0.03, float(tip[1]) - 0.02, float(tip[2]) - 0.05)   # 차가 어긋나 섬
+        self.eye = XYEye(self.ops, self.basket)
+        original = self.ops.grip
+
+        def grip(pct):
+            original(pct)
+            if pct > 50:
+                t = self.eye.tip()
+                self.eye.release_xy = (float(t[0]), float(t[1]), float(t[2]))
+                self.eye.loaded = True
+        self.ops.grip = grip
+        self.cfg = MissionConfig(track_period=0.01, place_servo_seconds=30.0, load_verify_seconds=0.3, load_verify_hits=2,
+                                 place_servo_deadband_px=4.0)                   # 4 픽셀 = 2 mm
+        self.clock = Clock()
+        self.runner = PlaceRunner(self.cfg, self.ops, self.eye, FakeLoadLink(), MotionBook(root / "m.json", root / "b"),
+                                  clock=self.clock, sleep=self.clock.sleep, log=lambda *a, **k: None)
+
+    def test_without_camera_direction_it_uses_saved_poses(self):
+        self.assertFalse(self.runner.yolo_ready(self.learned))                    # 카메라 방향을 재기 전에는 예전 방식
+
+    def test_measure_then_place_follows_the_basket(self):
+        cam = self.runner.measure_camera(self.learned)
+        m = cam["m"]
+        self.assertAlmostEqual(m[1][0], 2000, delta=150)                           # 손끝 x(앞) +1 m → 화면 y +2000 px
+        self.assertAlmostEqual(m[0][1], 2000, delta=150)                           # 손끝 y(왼쪽) +1 m → 화면 x +2000 px
+        self.book.set_cam(self.sid, cam)
+        learned = self.book.learned(self.sid)
+        self.assertTrue(self.runner.yolo_ready(learned))
+        seen = []
+        ok, why = self.runner.auto_place(learned, on_step=lambda n, k, w: seen.append((n, k)))
+        self.assertTrue(ok, why)
+        self.assertEqual(seen, [(5, True), (6, True), (7, True), (8, True), (9, True)])
+        rx, ry, rz = self.eye.release_xy
+        self.assertAlmostEqual(rx, self.basket[0], delta=0.004)                    # 바구니 바로 위에서 (4 mm 안)
+        self.assertAlmostEqual(ry, self.basket[1], delta=0.004)
+        self.assertAlmostEqual(rz, float(self.tip0[2]) - 0.04, delta=0.004)        # 학습한 깊이만큼 내려가서 놓음
+
+    def test_too_far_is_refused(self):
+        self.book.set_cam(self.sid, {"m": [[0.0, 2000.0], [2000.0, 0.0]], "z": 0.0})
+        self.eye.basket = (self.basket[0] + 0.2, self.basket[1], self.basket[2])  # 20 cm 넘게 어긋남 (화면 밖)
+        state, why = self.runner.yolo_above(self.book.learned(self.sid))
+        self.assertIsNone(state)
+
+    def test_wrong_direction_is_caught_by_the_limit(self):
+        self.book.set_cam(self.sid, {"m": [[0.0, -2000.0], [-2000.0, 0.0]], "z": 0.0})   # 방향이 반대로 잘못 잼
+        state, why = self.runner.yolo_above(self.book.learned(self.sid))
+        self.assertIsNone(state)
+        self.assertTrue("mm" in why or "보이지" in why, why)
 
 
 if __name__ == "__main__":

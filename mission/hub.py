@@ -144,6 +144,13 @@ SETTINGS = [
         ("place_servo_max_deg", "최대 보정 각도(도)", "학습한 자세에서 관절마다 이만큼까지만 더 움직여요. 넘으면 그 시도는 실패 (안전)", "float", 1, 60),
         ("place_servo_seconds", "맞추기 제한 시간(초)", "이 시간 안에 못 맞추면 그 시도는 실패", "float", 1, 60),
         ("place_servo_tilt_sign", "세로 맞추기 (어깨 2번)", "0 = 안 함 (받침으로 가로만 맞춤). 1 / -1 = 어깨로 세로도 맞추기 (반대로 움직이면 부호를 바꾸세요)", "tri", -1, 1),
+        ("place_use_yolo", "YOLO 넣기", "켜면 5 바구니 위를 YOLO 로 맞추고 6 · 8 은 수직으로 내려가고 올라와요 (세트마다 '카메라 방향 재기' 필요). 끄면 학습한 모터 값 평균으로", "bool", None, None),
+        ("place_step_mm", "YOLO 넣기: 한 번에 옮기는 거리(mm)", "바구니에 맞출 때 손끝을 한 번에 최대 이만큼 옮겨요", "float", 1, 50),
+        ("place_max_shift_mm", "YOLO 넣기: 최대 옮기는 거리(mm)", "학습한 5 자리에서 이만큼 넘게 옮겨야 하면 그 시도는 실패 (안전)", "float", 5, 300),
+        ("place_yolo_gain", "YOLO 넣기: 맞추는 세기", "한 번에 남은 거리의 몇 배를 옮길지 (1 = 한 번에 다, 작을수록 천천히)", "float", 0.1, 1.5),
+        ("place_calib_mm", "카메라 방향 재기 거리(mm)", "앞뒤 · 좌우로 이만큼 움직여 봐요 (바구니가 화면 밖으로 나가면 줄이세요)", "float", 3, 50),
+        ("place_extra_down_mm", "더 내려가지 않는 여유(mm)", "학습한 6 높이보다 이만큼 더 낮게는 절대 내려가지 않아요 (안전)", "float", 0, 100),
+        ("place_down_steps", "내려가기 · 올라오기 나눔 수", "6 내려가기와 8 올라오기를 몇 번에 나눠서 할지 (많을수록 곧게)", "int", 1, 20),
         ("track_pan_sign", "가로 맞추기 방향 (+1 / -1)", "받침을 + 로 돌렸을 때 바구니가 화면 왼쪽으로 가면 1, 오른쪽으로 가면 -1. 반대로 움직여 실패하면 바꾸세요", "sign", -1, 1),
     ]),
     ("차 추적", [
@@ -1328,7 +1335,7 @@ def make_router(hub: Hub):
                             raise ValueError("시작 단계를 다시 고르세요.") from None
                         return self.send_json(200, {"message": hub.place.start(action, str(data.get("sid")), link, start,
                                                                                data.get("color"), data.get("pause") is True)})
-                    if action == "goto" or action == "watch-redo":
+                    if action in ("goto", "watch-redo", "cam-measure"):
                         reason = hub.arm_in_use(ignore="place")
                         if reason:
                             raise ValueError(reason)
