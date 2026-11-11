@@ -1,6 +1,7 @@
 """허브 4번 'YOLO 넣기' 에 쓰는 손끝 좌표 도구: 모터 각도 ↔ 기구학 각도, 집게가 아래를 보는 IK, 손끝 옮기기.
 
 쓰는 곳: mission/place_flow.py (5 바구니 위 맞추기 · 6 내려가기 · 8 들어올리기 · 카메라 방향 재기)
+집게 기울기: 수직으로 세우지 않고 '학습한 5 자세의 기울기' 를 그대로 유지한다 (2026-11-11: 수직으로 세우면 손목이 한계를 넘었음)
 바탕: soarm/kinematics.py (URDF 로 FK · 야코비안) + camera/camlib.py 의 ik_down 과 같은 방식 (수업 파일은 고치지 않고 같은 식을 여기에 둔다)
 
 좌표: 로봇 받침 기준, m 단위 (x 앞, y 왼쪽, z 위). 손끝 = 집게 사이 (gripper_frame_link)
@@ -77,12 +78,19 @@ def _tip_and_axis(q, radial):
     return np.concatenate([tip, [0.1 * float(axis[:2] @ radial)]]), axis
 
 
-def ik_down(target, q0, iters: int = 300, tol: float = 0.001):
-    """손끝을 target(x, y, z m)에, 집게는 바닥을 향하게 → URDF 각도 5개(도). 닿지 않으면 None.
+def lean_of(q) -> float:
+    """집게가 받침 바깥(앞)으로 기운 정도 (0 = 수직 아래, 0.26 ≈ 15°). IK 가 이 값을 유지한다"""
+    tip = np.asarray(fk(q), float)
+    radial = tip[:2] / (np.linalg.norm(tip[:2]) or 1.0)
+    return float(_tip_and_axis(q, radial)[0][3] / 0.1)
+
+
+def ik_down(target, q0, iters: int = 300, tol: float = 0.001, lean: float = 0.0):
+    """손끝을 target(x, y, z m)에, 집게 기울기는 lean(0 = 수직 아래) 으로 → URDF 각도 5개(도). 닿지 않으면 None.
     q0(시작 자세)에 가까운 답이 나온다. 손목 회전(5번째)은 q0 그대로"""
     target = np.asarray(target, float)
     radial = target[:2] / (np.linalg.norm(target[:2]) or 1.0)
-    goal = np.concatenate([target, [0.0]])
+    goal = np.concatenate([target, [0.1 * lean]])
     q = np.array(q0[:5], float)
     for _ in range(iters):
         f, axis = _tip_and_axis(q, radial)
@@ -101,10 +109,10 @@ def ik_down(target, q0, iters: int = 300, tol: float = 0.001):
 
 
 class Reach:
-    """ops(ArmOps 또는 시험용 가짜 팔) 로 손끝을 좌표로 움직인다. 집게는 늘 바닥을 향한다"""
+    """ops(ArmOps 또는 시험용 가짜 팔) 로 손끝을 좌표로 움직인다. 집게 기울기는 lean 으로 고정 (학습한 5 자세에서 잼)"""
 
-    def __init__(self, ops):
-        self.ops = ops
+    def __init__(self, ops, lean: float = 0.0):
+        self.ops, self.lean = ops, lean
 
     def now(self) -> tuple[np.ndarray, list[float]]:
         """(지금 손끝 위치 m, 지금 URDF 각도)"""
@@ -115,9 +123,10 @@ class Reach:
         """손끝을 xyz 로 (집게는 아래). 닿지 않으면 ReachError. 반환: 이동한 URDF 각도"""
         if seed is None:
             seed = self.now()[1]
-        q = ik_down(xyz, seed)
+        q = ik_down(xyz, seed, lean=self.lean)
         if q is None:
             x, y, z = (float(v) for v in xyz)
-            raise ReachError(f"팔이 그 자리(x {x * 1000:.0f}, y {y * 1000:.0f}, z {z * 1000:.0f} mm)에 집게를 아래로 향한 채 닿지 않아요")
+            raise ReachError(f"팔이 거기까지 닿지 않아요 (받침에서 앞으로 {x * 1000:.0f} mm · 옆으로 {y * 1000:.0f} mm · 높이 {z * 1000:.0f} mm). "
+                             "관절(주로 손목)이 더 꺾이지 않는 자리예요")
         self.ops.move_to(angles_from_urdf(q))
         return q

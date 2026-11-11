@@ -32,7 +32,7 @@ from dataclasses import dataclass
 
 from .m3_pick_place import band_ok
 from .motions import MotionError, play
-from .place_reach import Reach, ReachError, tip_of
+from .place_reach import Reach, ReachError, lean_of, tip_of, urdf_from_angles
 from .yolo import BASKET_NAMES, pick_best
 
 PICK_MOTION = {"red": "빨간공_집기", "blue": "파란공_집기"}
@@ -303,6 +303,9 @@ class PlaceRunner:
 
     def step_release(self, learned: dict, corr: dict) -> tuple[bool, str]:
         self.check()
+        ok, held = self.holding()
+        if not ok:
+            return False, held
         goal = {j: learned["poses"]["release"][j] + corr.get(j, 0.0) for j in JOINTS}
         self.ops.move_to(goal)
         pct = learned.get("release_grip")
@@ -324,6 +327,8 @@ class PlaceRunner:
         goal = dict(learned["poses"]["check"])
         goal["1"] = goal["1"] + corr.get("1", 0.0)               # 확인 자세는 받침 보정만
         self.ops.move_to(goal)
+        if self.cfg.grip_ball_max_pct > 0 and band_ok(self.cfg, self.ops.grip_pct()):
+            return False, "집게가 아직 공을 쥐고 있어요 (놓지 못함 → 실패)"
         ok = self.basket_has_ball()
         return ok, "공이 든 바구니가 보여요 (성공)" if ok else "공이 든 바구니가 안 보여요 (실패)"
 
@@ -362,28 +367,47 @@ class PlaceRunner:
             return None
         return sum(xs) / len(xs), sum(ys) / len(ys)
 
+    def _reach(self, learned: dict) -> Reach:
+        """학습한 5 자세의 집게 기울기를 유지하는 손끝 이동기"""
+        return Reach(self.ops, lean_of(urdf_from_angles(learned["poses"]["above"])))
+
+    def holding(self) -> tuple[bool, str]:
+        """집게가 아직 공을 쥐고 있나 (7 집게 해제 전 확인). 공 크기 범위를 안 쓰는 설정이면 늘 True"""
+        if self.cfg.grip_ball_max_pct <= 0:
+            return True, ""
+        pct = self.ops.grip_pct()
+        if band_ok(self.cfg, pct):
+            return True, ""
+        return False, f"집게가 공을 쥐고 있지 않아요 (집게 {pct}%). 바구니에 넣기 전에 공이 빠진 것 같아요"
+
     def measure_camera(self, learned: dict) -> dict:
         """카메라 방향 재기: 바구니 위에서 손끝을 앞뒤 · 좌우로 조금 움직여 보고 바구니가 화면에서 얼마나 움직이는지 잰다.
         반환 {"m": [[px/m, px/m], [px/m, px/m]], "z": 높이 m}. 실패하면 ReachError"""
-        reach = Reach(self.ops)
+        reach = self._reach(learned)
         self.check()
         self.ops.move_to(learned["poses"]["above"])
         tip, q = reach.now()
-        q = reach.go(tip, q)                                  # 같은 자리에서 집게를 아래로
         d = self.cfg.place_calib_mm / 1000.0
         p0 = self._box_px()
         if p0 is None:
             raise ReachError("바구니가 카메라에 보이지 않아요. 바구니가 보이는 곳에서 다시 재세요")
         cols = []
         for axis in (0, 1):
-            moved = tip.copy()
-            moved[axis] += d
-            reach.go(moved, q)
+            for step in (d, -d):                              # 한쪽으로 팔이 닿지 않으면 반대쪽으로 움직여 잰다
+                moved = tip.copy()
+                moved[axis] += step
+                try:
+                    reach.go(moved, q)
+                except ReachError:
+                    continue
+                break
+            else:
+                raise ReachError("바구니 위에서 앞뒤 · 좌우로 조금도 움직일 수 없어요. 5 바구니 위 자세를 팔이 덜 뻗은 곳으로 다시 가르치세요")
             p1 = self._box_px()
             reach.go(tip, q)
             if p1 is None:
-                raise ReachError("움직여 보는 동안 바구니가 화면에서 사라졌어요. 재는 거리(place_calib_mm)를 줄이세요")
-            cols.append(((p1[0] - p0[0]) / d, (p1[1] - p0[1]) / d))
+                raise ReachError("움직여 보는 동안 바구니가 화면에서 사라졌어요. 설정의 '카메라 방향 재기 거리' 를 줄이세요")
+            cols.append(((p1[0] - p0[0]) / step, (p1[1] - p0[1]) / step))
         m = [[cols[0][0], cols[1][0]], [cols[0][1], cols[1][1]]]
         det = m[0][0] * m[1][1] - m[0][1] * m[1][0]
         if abs(det) < 1e3:                                    # 거의 안 움직였다 (1 cm 에 몇 픽셀도 안 됨)
@@ -395,7 +419,7 @@ class PlaceRunner:
         """5) 학습한 5 자세로 간 뒤, 집게를 아래로 향하고 손끝을 옮겨 바구니를 목표 픽셀 자리에 맞춘다.
         성공하면 (상태, 설명). 상태 = {"xyz": 맞춘 손끝 위치, "q": URDF 각도, "corr": 받침 보정}"""
         cfg = self.cfg
-        reach = Reach(self.ops)
+        reach = self._reach(learned)
         base = learned["poses"]["above"]
         target, cam = learned["target"], learned["cam"]
         m = cam["m"]
@@ -404,13 +428,19 @@ class PlaceRunner:
         self.check()
         self.ops.move_to(base)
         start, q = reach.now()
-        try:
-            q = reach.go(start, q)                            # 같은 자리에서 집게를 아래로
-        except ReachError as e:
-            return None, str(e)
         xyz = start.copy()
         t0 = self.clock()
         missed = 0
+        last = None
+
+        def done(why):
+            ok, held = self.holding()
+            if not ok:
+                return None, held
+            corr = {j: round(v - base[j], 2) for j, v in self.ops.angles().items()}
+            self.log("yolo_above_ok", why=why, xyz=[round(float(v), 3) for v in xyz])
+            return {"xyz": xyz, "q": q, "corr": corr}, why
+
         while True:
             self.check()
             if self.clock() - t0 > cfg.place_servo_seconds:
@@ -425,10 +455,9 @@ class PlaceRunner:
                 continue
             missed = 0
             ex, ey = box.cx - target["cx"], box.cy - target["cy"]
+            last = (ex, ey)
             if abs(ex) <= cfg.place_servo_deadband_px and abs(ey) <= cfg.place_servo_deadband_px:
-                corr = {j: round(v - base[j], 2) for j, v in self.ops.angles().items()}
-                self.log("yolo_above_ok", ex=round(ex), ey=round(ey), xyz=[round(float(v), 3) for v in xyz])
-                return {"xyz": xyz, "q": q, "corr": corr}, f"바구니 위로 맞췄어요 (가로 {ex:+.0f}, 세로 {ey:+.0f} 픽셀 차이)"
+                return done(f"바구니 위로 맞췄어요 (가로 {ex:+.0f}, 세로 {ey:+.0f} 픽셀 차이)")
             dx = -(inv[0][0] * ex + inv[0][1] * ey) * cfg.place_yolo_gain      # 손끝을 옮길 거리 (m)
             dy = -(inv[1][0] * ex + inv[1][1] * ey) * cfg.place_yolo_gain
             size = math.hypot(dx, dy)
@@ -443,8 +472,9 @@ class PlaceRunner:
                               "(차가 너무 벗어나 섰거나 카메라 방향을 다시 재야 할 수 있어요)")
             try:
                 q = reach.go(goal, q)
-            except ReachError as e:
-                return None, str(e)
+            except ReachError:
+                # 더 가면 팔이 닿지 않는다 → 여기까지 맞춘 자리에서 넣는다 (멈추지 않고 진행)
+                return done(f"팔이 더 갈 수 없어 여기서 넣어요 (가로 {last[0]:+.0f}, 세로 {last[1]:+.0f} 픽셀 차이)")
             xyz = goal
 
     def yolo_here(self, learned: dict, start: int) -> dict:
@@ -460,16 +490,23 @@ class PlaceRunner:
         """학습한 5(바구니 위)와 6(바구니 안)의 손끝 높이 차 (m)"""
         return max(0.0, float(tip_of(learned["poses"]["above"])[2] - tip_of(learned["poses"]["inside"])[2]))
 
-    def _vertical(self, state: dict, z_from: float, z_to: float) -> None:
-        reach = Reach(self.ops)
+    def _vertical(self, learned: dict, state: dict, z_from: float, z_to: float) -> float:
+        """z_from → z_to 로 곧게. 팔이 닿지 않으면 그 앞에서 멈춘다. 반환: 실제로 간 높이"""
+        reach = self._reach(learned)
         n = max(1, int(self.cfg.place_down_steps))
         q = state["q"]
+        reached = z_from
         for i in range(1, n + 1):
             self.check()
             goal = state["xyz"].copy()
             goal[2] = z_from + (z_to - z_from) * i / n
-            q = reach.go(goal, q)
+            try:
+                q = reach.go(goal, q)
+            except ReachError:
+                break
+            reached = float(goal[2])
         state["q"] = q
+        return reached
 
     def yolo_down(self, learned: dict, state: dict) -> tuple[bool, str]:
         """6) 맞춘 자리에서 학습한 깊이만큼 수직으로 내려간다"""
@@ -477,15 +514,21 @@ class PlaceRunner:
         floor = float(tip_of(learned["poses"]["inside"])[2]) - self.cfg.place_extra_down_mm / 1000.0
         z_top = float(state["xyz"][2])
         z_to = max(z_top - depth, floor)
-        try:
-            self._vertical(state, z_top, z_to)
-        except ReachError as e:
-            return False, str(e)
-        return True, f"바구니 안으로 {(z_top - z_to) * 1000:.0f} mm 수직으로 내려갔어요"
+        reached = self._vertical(learned, state, z_top, z_to)
+        down = (z_top - reached) * 1000
+        ok, held = self.holding()
+        if not ok:
+            return False, held
+        if down < (z_top - z_to) * 1000 - 1:
+            return True, f"팔이 더 내려갈 수 없어 {down:.0f} mm 만 내려갔어요 (여기서 집게를 열어요)"
+        return True, f"바구니 안으로 {down:.0f} mm 곧게 내려갔어요"
 
     def release_here(self, learned: dict, corr: dict | None = None) -> tuple[bool, str]:
-        """7) 그 자리에서 집게만 연다"""
+        """7) 그 자리에서 집게만 연다 (열기 전에 공을 쥐고 있는지 확인)"""
         self.check()
+        ok, held = self.holding()
+        if not ok:
+            return False, held
         pct = learned.get("release_grip")
         if pct is None:
             pct = self.cfg.grip_open_pct
@@ -495,11 +538,12 @@ class PlaceRunner:
     def yolo_lift(self, learned: dict, state: dict) -> tuple[bool, str]:
         """8) 집게를 연 채로 5 의 높이까지 수직으로 올라온다"""
         z_now = float(Reach(self.ops).now()[0][2])
-        try:
-            self._vertical(state, z_now, float(state["xyz"][2]))
-        except ReachError as e:
-            return False, str(e)
-        return True, "집게를 연 채로 수직으로 들어 올렸어요"
+        reached = self._vertical(learned, state, z_now, float(state["xyz"][2]))
+        if reached < float(state["xyz"][2]) - 0.001:                  # 곧게 다 못 올라왔다 → 학습한 8 자세로
+            pose = learned["poses"].get("lift") or learned["poses"]["above"]
+            self.ops.move_to({j: pose[j] + state["corr"].get(j, 0.0) for j in JOINTS})
+            return True, "곧게 다 못 올라와서 학습한 8 자세로 들어 올렸어요"
+        return True, "집게를 연 채로 곧게 들어 올렸어요"
 
     def yolo_steps(self, learned: dict, state: dict):
         """6 · 7 · 8 · 9 (번호, 실행 함수) — YOLO 넣기"""

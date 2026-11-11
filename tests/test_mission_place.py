@@ -591,6 +591,73 @@ class YoloPlaceTest(unittest.TestCase):
         self.assertAlmostEqual(ry, self.basket[1], delta=0.004)
         self.assertAlmostEqual(rz, float(self.tip0[2]) - 0.04, delta=0.004)        # 학습한 깊이만큼 내려가서 놓음
 
+    def ready(self):
+        self.book.set_cam(self.sid, {"m": [[0.0, 2000.0], [2000.0, 0.0]], "z": 0.0})
+        return self.book.learned(self.sid)
+
+    def test_keeps_the_taught_gripper_tilt(self):
+        from mission.place_reach import lean_of, urdf_from_angles
+        learned = self.ready()
+        taught = lean_of(urdf_from_angles(learned["poses"]["above"]))
+        state, why = self.runner.yolo_above(learned)
+        self.assertIsNotNone(state, why)
+        self.assertAlmostEqual(lean_of(urdf_from_angles(self.ops.a)), taught, delta=0.02)   # 수직으로 세우지 않음
+
+    def test_unreachable_goes_as_far_as_it_can_then_releases(self):
+        from mission import place_flow
+        from mission.place_reach import ReachError
+        learned = self.ready()
+        calls = {"n": 0}
+        original = place_flow.Reach.go
+
+        def go(reach, xyz, seed=None):
+            calls["n"] += 1
+            if calls["n"] > 2:                                                      # 두 번 옮긴 뒤로는 팔이 닿지 않음
+                raise ReachError("닿지 않음")
+            return original(reach, xyz, seed)
+        place_flow.Reach.go = go
+        self.addCleanup(setattr, place_flow.Reach, "go", original)
+        seen = []
+        ok, why = self.runner.auto_place(learned, on_step=lambda n, k, w: seen.append((n, k, w)))
+        self.assertIn("여기서 넣어요", seen[0][2])                                 # 멈추지 않고 진행
+        self.assertTrue(seen[1][1])
+        self.assertIn("만 내려갔어요", seen[1][2])                                  # 6 도 가능한 만큼만
+        self.assertEqual([n for n, *_ in seen], [5, 6, 7, 8, 9])
+        self.assertTrue(self.eye.loaded)                                            # 집게는 열었다
+
+    def test_ball_must_still_be_held_before_release(self):
+        self.cfg.grip_ball_min_pct, self.cfg.grip_ball_max_pct = 20.0, 40.0
+        learned = self.ready()
+        state, why = self.runner.yolo_above(learned)
+        self.assertIsNotNone(state, why)
+        self.ops.gripper = 95.0                                                     # 공이 빠짐 (집게가 끝까지 닫혀 버림 흉내)
+        ok, why = self.runner.release_here(learned)
+        self.assertFalse(ok)
+        self.assertIn("쥐고 있지 않아요", why)
+
+    def test_check_fails_while_the_ball_is_still_in_the_gripper(self):
+        self.cfg.grip_ball_min_pct, self.cfg.grip_ball_max_pct = 20.0, 40.0
+        learned = self.ready()
+        self.eye.loaded = True                                                      # YOLO 는 '공이 든 바구니' 라고 해도
+        ok, why = self.runner.step_check(learned, {})
+        self.assertFalse(ok)
+        self.assertIn("아직 공을 쥐고", why)
+
+    def test_measure_uses_the_other_side_when_one_side_is_out_of_reach(self):
+        from mission import place_flow
+        from mission.place_reach import ReachError
+        original = place_flow.Reach.go
+        tip0 = self.tip0
+
+        def go(reach, xyz, seed=None):
+            if xyz[0] > tip0[0] + 0.001:                                            # 앞으로는 팔이 닿지 않음
+                raise ReachError("닿지 않음")
+            return original(reach, xyz, seed)
+        place_flow.Reach.go = go
+        self.addCleanup(setattr, place_flow.Reach, "go", original)
+        cam = self.runner.measure_camera(self.learned)
+        self.assertAlmostEqual(cam["m"][1][0], 2000, delta=150)                   # 뒤로 움직여 재도 같은 값
+
     def test_too_far_is_refused(self):
         self.book.set_cam(self.sid, {"m": [[0.0, 2000.0], [2000.0, 0.0]], "z": 0.0})
         self.eye.basket = (self.basket[0] + 0.2, self.basket[1], self.basket[2])  # 20 cm 넘게 어긋남 (화면 밖)
