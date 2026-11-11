@@ -30,9 +30,25 @@ PLACE_FILE = ROOT / "data" / "place_learn.json"
 PLACE_DIR = ROOT / "data" / "place_learn"
 
 # 단계 이름 (영어 = 파일 · 코드용, 한글 = 화면용)
-STEPS = ("above", "inside", "release", "check")
-STEP_NUM = {"above": 5, "inside": 6, "release": 7, "check": 8}
-STEP_LABELS = {"above": "5 바구니 위", "inside": "6 바구니 안", "release": "7 집게 해제", "check": "8 성공 확인"}
+STEPS = ("above", "inside", "release", "lift", "check")
+STEP_NUM = {"above": 5, "inside": 6, "release": 7, "lift": 8, "check": 9}
+STEP_LABELS = {"above": "5 바구니 위", "inside": "6 바구니 안", "release": "7 집게 해제", "lift": "8 들어올리기",
+               "check": "9 성공 확인"}
+
+
+def take_step(take: dict, step: str) -> dict:
+    """회차의 한 단계. 들어올리기(lift)가 생기기 전 회차는 5(바구니 위) 자세 + 7 의 집게 % 로 채운다 (filled=True)"""
+    steps = take["steps"]
+    if step in steps:
+        return steps[step]
+    if step == "lift" and "above" in steps:
+        filled = dict(steps["above"])
+        filled["grip"] = steps.get("release", {}).get("grip", filled.get("grip"))
+        filled["basket"] = None
+        filled["image"] = None
+        filled["filled"] = True
+        return filled
+    raise PlaceError(f"회차에 {STEP_LABELS.get(step, step)} 값이 없어요.")
 JOINTS = ("1", "2", "3", "4", "5")
 ID_RE = re.compile(r"^[st][0-9]{1,6}$")
 
@@ -255,7 +271,7 @@ class PlaceBook:
             raise PlaceError(f"세트 '{entry['label']}' 에 ✔ 사용 회차가 없어요. 4번에서 학습하거나 회차를 ✔ 로 바꾸세요.")
 
         def mean_angles(step):
-            return {j: round(sum(t["steps"][step]["angles"][j] for t in used) / len(used), 2) for j in JOINTS}
+            return {j: round(sum(take_step(t, step)["angles"][j] for t in used) / len(used), 2) for j in JOINTS}
 
         targets = [t["steps"]["above"].get("basket") for t in used]
         targets = [b for b in targets if b]
@@ -270,15 +286,19 @@ class PlaceBook:
             "release_grip": None if not grips else round(sum(grips) / len(grips), 1),
         }
 
+    @staticmethod
+    def _step_view(take: dict, step: str) -> dict:
+        snap = take_step(take, step)
+        return {"angles": snap["angles"], "grip": snap.get("grip"), "basket": snap.get("basket"),
+                "image": snap.get("image"), "t": snap.get("t"), "filled": bool(snap.get("filled"))}
+
     def summary(self) -> dict:
         """화면용 요약"""
         out = []
         for sid, entry in self.sets.items():
             takes = [{"id": tid, "label": t["label"], "created": t["created"], "use": t.get("use"),
                       "success": t.get("success"), "color": t.get("color"),
-                      "steps": {s: {"angles": t["steps"][s]["angles"], "grip": t["steps"][s].get("grip"),
-                                    "basket": t["steps"][s].get("basket"), "image": t["steps"][s].get("image")}
-                                for s in STEPS}}
+                      "steps": {s: self._step_view(t, s) for s in STEPS}}
                      for tid, t in entry["takes"].items()]
             out.append({"id": sid, "label": entry["label"], "created": entry["created"],
                         "chosen": self.data.get("chosen") == sid, "watch": entry.get("watch"), "takes": takes,

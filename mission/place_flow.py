@@ -286,7 +286,7 @@ class PlaceRunner:
         now = self.ops.angles()
         return {j: round(now[j] - base[j], 2) for j in JOINTS}
 
-    # ── 6 · 7 · 8) 보정한 만큼 더해서 이동 ─────────────────────────────
+    # ── 6 · 7 · 8 · 9) 보정한 만큼 더해서 이동 ─────────────────────────
     def step_inside(self, learned: dict, corr: dict) -> tuple[bool, str]:
         self.check()
         goal = {j: learned["poses"]["inside"][j] + corr.get(j, 0.0) for j in JOINTS}
@@ -302,6 +302,14 @@ class PlaceRunner:
             pct = self.cfg.grip_open_pct
         self.ops.grip(pct)
         return True, f"집게를 {pct:g}% 로 열었어요"
+
+    def step_lift(self, learned: dict, corr: dict) -> tuple[bool, str]:
+        """8 들어올리기: 집게를 연 채로 학습한 자세로 들어 올린다 (바구니에서 집게를 빼기)"""
+        self.check()
+        pose = learned["poses"].get("lift") or learned["poses"]["above"]
+        goal = {j: pose[j] + corr.get(j, 0.0) for j in JOINTS}
+        ok = self.ops.move_to(goal)
+        return True, "집게를 연 채로 들어 올렸어요" + ("" if ok else " (목표에 다 못 갔어요: 걸렸을 수 있어요)")
 
     def step_check(self, learned: dict, corr: dict) -> tuple[bool, str]:
         self.check()
@@ -325,13 +333,13 @@ class PlaceRunner:
         return False
 
     def auto_place(self, learned: dict, on_step=None) -> tuple[bool, str]:
-        """5 → 6 → 7 → 8 자동. on_step(번호, 성공?, 설명) 을 단계마다 부른다"""
+        """5 → 6 → 7 → 8 → 9 자동. on_step(번호, 성공?, 설명) 을 단계마다 부른다"""
         corr, why = self.step_above(learned)
         if on_step:
             on_step(5, corr is not None, why)
         if corr is None:
             return False, why
-        for num, fn in ((6, self.step_inside), (7, self.step_release), (8, self.step_check)):
+        for num, fn in ((6, self.step_inside), (7, self.step_release), (8, self.step_lift), (9, self.step_check)):
             ok, why = fn(learned, corr)
             if on_step:
                 on_step(num, ok, why)

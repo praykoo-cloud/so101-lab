@@ -1,4 +1,4 @@
-"""허브 4번 '바구니 넣기 학습' 화면: 실제 상차 순서대로 돌리면서 5~8 단계를 손으로 가르치고, 테스트로 확인한다.
+"""허브 4번 '바구니 넣기 학습' 화면: 실제 상차 순서대로 돌리면서 5~9 단계를 손으로 가르치고, 테스트로 확인한다.
 
 실행 (Pi 의 Docker 안, 진짜 정차 · 출발 신호):
     ./허브_도커.sh                     → 브라우저로 http://<Pi 의 IP>:8081/p/place
@@ -6,18 +6,19 @@
 
 학습 한 회차 (화면에도 적혀 있다)
   1 [학습 시작] → 2 대기 자세 · 차 기다림 → 3 차 + 상자가 보이면 정지 신호 → 4 색 읽고 공 집기 (프로그램)
-  5 바구니 위 · 6 바구니 안 · 7 집게 해제 · 8 성공 확인 자세 (사람이 손으로 옮기고 저장)
-  8 에서만 [다음 단계 진행] → 9 성공이면 대기 자세 + 출발 신호 / 10 실패면 공을 받침대에 놓고 [공 놓았어요] → 4 부터
+  5 바구니 위 · 6 바구니 안 · 7 집게 해제 · 8 들어올리기(집게를 연 채) · 9 성공 확인 자세 (사람이 손으로 옮기고 저장)
+  9 에서만 [다음 단계 진행] → 10 성공이면 대기 자세 + 출발 신호 / 11 실패면 공을 받침대에 놓고 [공 놓았어요] → 4 부터
+  (8 들어올리기는 2026-11-11 에 추가. 그 전 회차는 5 바구니 위 자세로 대신 쓴다)
 
 시작 번호 (학습 · 테스트 모두, 고른 번호부터 '지금 상태' 에서 이어서 한다)
   2~4 : 처음부터 (대기 자세 · 차 기다림 · 정지 · 색 · 공 집기)
   4   : (테스트만) 포스트잇을 읽고 그 색에 맞는 공(빨강 = 빨간공_집기, 파랑 = 파란공_집기)을 집기까지만. 차 신호는 안 보낸다
-  5~8 : 팔이 공을 쥐고 있는 상태에서 그 단계부터 (색을 골라야 한다). 학습을 6~8 부터 하면 앞 단계 값은 가장 최근 성공 회차에서 빌린다
-  9   : 대기 자세로 가서 출발 신호(SUCCESS) 만
+  5~9 : 팔이 공을 쥐고 있는(또는 놓은) 상태에서 그 단계부터 (색을 골라야 한다). 학습을 6~9 부터 하면 앞 단계 값은 가장 최근 성공 회차에서 빌린다
+  10  : 대기 자세로 가서 출발 신호(SUCCESS) 만
 색: 자동(포스트잇 읽기) · 빨강 · 파랑. 2~4 에서 빨강 / 파랑을 고르면 포스트잇 읽기를 건너뛰고 그 색 공을 집는다
 
 안전
-- 5 · 6 · 8 에서는 팔(1~5번)만 힘을 뺀다. 집게(6번)는 힘을 유지해서 쥔 공이 떨어지지 않는다. 팔을 손으로 받칠 것!
+- 5 · 6 · 8 · 9 에서는 팔(1~5번)만 힘을 뺀다. 집게(6번)는 힘을 유지해서 쥔 공이 떨어지지 않는다. 팔을 손으로 받칠 것!
 - '정지' 는 지금 동작이 끝나면 멈추고 팔은 그 자리에서 힘을 준다. 차를 세워 둔 뒤 멈추거나 오류가 나면 차는 **그대로 서 있는다**
   (집게가 바구니 안에 있을 수 있으므로). 팔을 치운 뒤 [차 출발시키기] 를 누르면 FAILED + 일시정지 해제를 보낸다.
 """
@@ -27,14 +28,16 @@ import threading
 import time
 
 from .place_flow import ArmOps, FlowAbort, FlowStopped, PlaceRunner
-from .place_learn import STEP_LABELS, STEP_NUM, STEPS, PlaceBook, PlaceError, make_snap
+from .place_learn import STEP_LABELS, STEP_NUM, STEPS, PlaceBook, PlaceError, make_snap, take_step
 
-TEACH_STEPS = {5: "above", 6: "inside", 7: "release", 8: "check"}
-LEARN_STARTS = (2, 5, 6, 7, 8, 9)
-TEST_STARTS = (2, 4, 5, 6, 7, 8, 9)               # 테스트 4 = 포스트잇 읽고 맞는 공 집기만
+TEACH_STEPS = {5: "above", 6: "inside", 7: "release", 8: "lift", 9: "check"}
+LAST_TEACH = 9                                    # 손으로 가르치는 마지막 단계 (성공 확인)
+GO_STEP, FAIL_STEP = 10, 11                       # 성공 → 출발 신호, 실패 → 4번부터
+LEARN_STARTS = (2, 5, 6, 7, 8, 9, 10)
+TEST_STARTS = (2, 4, 5, 6, 7, 8, 9, 10)           # 테스트 4 = 포스트잇 읽고 맞는 공 집기만
 COLOR_NAMES = {"red": "빨간", "blue": "파란"}
 STEP_TITLES = {2: "대기 자세 · 차 기다림", 3: "정차 신호 · 완전 정차", 4: "색 읽기 · 공 집기", 5: "바구니 위", 6: "바구니 안",
-               7: "집게 해제", 8: "성공 확인", 9: "성공 → 출발 신호", 10: "실패 → 4번부터 다시"}
+               7: "집게 해제", 8: "들어올리기", 9: "성공 확인", 10: "성공 → 출발 신호", 11: "실패 → 4번부터 다시"}
 
 
 class PlaceSession:
@@ -139,8 +142,8 @@ class PlaceSession:
         elif mode == "learn":
             if start_step not in LEARN_STARTS:
                 raise PlaceError("시작 단계를 다시 고르세요.")
-            if 6 <= start_step <= 8 and self.book.latest_success(sid) is None:
-                raise PlaceError("6~8 부터 학습하려면 앞 단계 값을 빌려 올 성공 회차가 있어야 해요. 먼저 2~4 나 5 부터 한 번 학습하세요.")
+            if 6 <= start_step <= LAST_TEACH and self.book.latest_success(sid) is None:
+                raise PlaceError("6~9 부터 학습하려면 앞 단계 값을 빌려 올 성공 회차가 있어야 해요. 먼저 2~4 나 5 부터 한 번 학습하세요.")
         else:
             raise PlaceError("모드를 다시 고르세요.")
         if start_step >= 5 and color is None:
@@ -204,9 +207,9 @@ class PlaceSession:
         self._go_wait(runner)
         self.link.set("SUCCESS" if success else "FAILED")
         if success:
-            self._result(9, True, "성공! 대기 자세로 돌아와 차에게 출발 신호(SUCCESS)를 보냈어요.")
+            self._result(GO_STEP, True, "성공! 대기 자세로 돌아와 차에게 출발 신호(SUCCESS)를 보냈어요.")
         else:
-            self._say(10, f"{self.cfg.attempts_max}번 모두 실패해서 차에게 FAILED(공 없이 출발)를 보냈어요. {why}".strip(), True)
+            self._say(FAIL_STEP, f"{self.cfg.attempts_max}번 모두 실패해서 차에게 FAILED(공 없이 출발)를 보냈어요. {why}".strip(), True)
 
     def _car_and_color(self, runner: PlaceRunner, sid: str | None, color: str | None = None) -> str | None:
         """2 · 3 · 4(색). color 를 골랐으면 포스트잇 읽기는 건너뛴다. 실패하면 None"""
@@ -262,7 +265,7 @@ class PlaceSession:
     def _run_learn(self, sid, _learned, start, _pause):
         runner = self._runner()
         color = self.status["color"]
-        if start == 9:
+        if start == GO_STEP:
             self._hold_car(color)
             return self._finish(runner, True)
         if start == 2:
@@ -285,7 +288,7 @@ class PlaceSession:
         self._finish(runner, False)
 
     def _draft_status(self):
-        """화면에 보여 줄 '지금 묶음' (5~8 중 저장한 것: 모터 값 · 집게 % · 바구니 · 시각 · 사진 유무)"""
+        """화면에 보여 줄 '지금 묶음' (5~9 중 저장한 것: 모터 값 · 집게 % · 바구니 · 시각 · 사진 유무)"""
         self.status["draft"] = {k: {"angles": v["angles"], "grip": v["grip"], "basket": v["basket"], "t": v.get("t"),
                                     "img": self.images.get(k) is not None} for k, v in self.draft.items()}
         self.status["draft_v"] = self.status.get("draft_v", 0) + 1          # 사진 주소를 바꿔 새 사진을 보이게
@@ -294,7 +297,7 @@ class PlaceSession:
         return self.images.get(step) if step in STEPS else None
 
     def _teach(self, runner: PlaceRunner, sid: str, color: str, first: int = 5) -> bool:
-        """first 단계부터 손으로 가르친다. first 가 6~8 이면 앞 단계는 가장 최근 성공 회차에서 빌린다"""
+        """first 단계부터 손으로 가르친다. first 가 6~9 이면 앞 단계는 가장 최근 성공 회차에서 빌린다"""
         self.draft, self.images = {}, {}
         if first > 5:
             found = self.book.latest_success(sid)
@@ -303,7 +306,7 @@ class PlaceSession:
             _tid, take = found
             for step in STEPS:
                 if STEP_NUM[step] < first:
-                    snap = take["steps"][step]
+                    snap = take_step(take, step)
                     self.draft[step] = make_snap(snap["angles"], snap.get("grip"), snap.get("basket"), None)
                     self.images[step] = self.book.step_image(sid, snap)
             self._say(first, f"5~{first - 1} 단계는 '{take['label']}' 값을 빌려 왔어요. 지금 자세에서 {first}단계부터 가르쳐요.")
@@ -313,15 +316,16 @@ class PlaceSession:
         prompts = (
             (5, "5 바구니 위: 팔을 손으로 받치고 집게가 바구니 바로 위에 오게 옮긴 뒤 [5 저장] (집게는 힘이 들어가 있어 공을 쥐고 있어요)"),
             (6, "6 바구니 안: 집게를 바구니 안으로 내린 뒤 [6 저장]"),
-            (7, "7 집게 해제: [팔 고정] 으로 팔을 멈춘 뒤 [조금 열기] 로 공을 놓고 [7 저장]"),
-            (8, "8 성공 확인: [팔 힘 빼기] 후 바구니가 보이는 자세로 옮기고 [8 저장]"),
+            (7, "7 집게 해제: [힘 주기] 로 팔을 멈춘 뒤 [조금 열기] 로 공을 놓고 [7 저장]"),
+            (8, "8 들어올리기: [힘 빼기] 후 집게를 연 채로 팔을 바구니 위로 들어 올리고 [8 저장]"),
+            (9, "9 성공 확인: 바구니가 보이는 자세로 옮기고 [9 저장]"),
         )
         for num, text in prompts:
             if num >= first:
                 self._wait_user(f"teach{num}", text)
         self.ops.torque_arm(True)
         self.status["arm_torque"] = True
-        self._say(8, "공이 든 바구니가 보이는지 확인하는 중…")
+        self._say(LAST_TEACH, "공이 든 바구니가 보이는지 확인하는 중…")
         judged = runner.basket_has_ball()
         self.status["judged"] = judged
         reply = self._wait_user("next", f"YOLO 판정: {'성공' if judged else '실패'}. 맞으면 [다음 단계 진행], 틀리면 판정을 바꾼 뒤 진행하세요.")
@@ -331,7 +335,7 @@ class PlaceSession:
         label = self.book.take(sid, tid)["label"]
         self.draft, self.images = {}, {}
         self._draft_status()
-        self._result(8, success, f"{label} 저장 ({'성공 → ✔ 사용' if success else '실패 → ✘ 제외 (기록만)'})")
+        self._result(LAST_TEACH, success, f"{label} 저장 ({'성공 → ✔ 사용' if success else '실패 → ✘ 제외 (기록만)'})")
         return success
 
     def _capture_watch(self, sid: str):
@@ -351,7 +355,7 @@ class PlaceSession:
         color = self.status["color"]
         if start == 4:
             return self._pick_only(runner, color)
-        if start == 9:
+        if start == GO_STEP:
             self._hold_car(color)
             return self._finish(runner, True)
         if start == 2:
@@ -400,7 +404,7 @@ class PlaceSession:
             self._result(5, corr is not None, why)
             if corr is None:
                 return False
-        for num, fn in ((6, runner.step_inside), (7, runner.step_release), (8, runner.step_check)):
+        for num, fn in ((6, runner.step_inside), (7, runner.step_release), (8, runner.step_lift), (9, runner.step_check)):
             if num < start:
                 continue
             maybe_pause(num)
@@ -462,7 +466,7 @@ class PlaceSession:
             self._need_idle()
             self.draft, self.images = {}, {}
             self._draft_status()
-            return "지금 묶음(5~8)을 비웠어요."
+            return "지금 묶음(5~9)을 비웠어요."
         if action == "take-save":
             return self._take_save(data)
         if action == "next":
@@ -514,11 +518,11 @@ class PlaceSession:
             self._answer(f"teach{num}")
             return f"{STEP_LABELS[step]} 저장 (사진 + 모터 값)."
         left = [STEP_LABELS[s] for s in STEPS if s not in self.draft]
-        tail = " 아직: " + ", ".join(left) if left else " 네 단계가 다 모였어요. [새 회차로 저장] 을 누르세요."
+        tail = " 아직: " + ", ".join(left) if left else " 다섯 단계가 다 모였어요. [새 회차로 저장] 을 누르세요."
         return f"{STEP_LABELS[step]} {'다시 저장 (덮어씀)' if again else '저장'} (사진 + 모터 값).{tail}"
 
     def _take_save(self, data: dict) -> str:
-        """학습을 돌리지 않고 손으로 모은 5~8 묶음을 회차로 저장"""
+        """학습을 돌리지 않고 손으로 모은 5~9 묶음을 회차로 저장"""
         self._need_idle()
         sid = str(data.get("sid"))
         self.book.get_set(sid)
@@ -551,7 +555,7 @@ class PlaceSession:
             if snap is None:
                 raise PlaceError("이 세트에는 아직 대기 자세 기록이 없어요.")
         elif step in STEPS:
-            snap = self.book.take(sid, str(data.get("tid")))["steps"][step]
+            snap = take_step(self.book.take(sid, str(data.get("tid"))), step)
         else:
             raise PlaceError("이동할 자세를 다시 고르세요.")
         with self.lock:
@@ -559,7 +563,7 @@ class PlaceSession:
                 raise PlaceError("모터가 뜨거워요.")
             self.ops.torque_arm(True)
             self.ops.move_to(snap["angles"])
-            if step == "release" and snap.get("grip") is not None:
+            if step in ("release", "lift") and snap.get("grip") is not None:
                 self.ops.grip(snap["grip"])
         self.status["arm_torque"] = True
         return f"{'대기 자세' if step == 'watch' else STEP_LABELS[step]} 자세로 이동했어요."
@@ -574,14 +578,14 @@ class PlaceSession:
 def place_body() -> str:
     step_rows = "".join(f"<li data-step={n}><b>{n}</b> {name}</li>" for n, name in STEP_TITLES.items())
     first = "<option value=2>2~4 처음부터 (대기 · 차 · 정지 · 색 · 공 집기)</option>"
-    later = "".join(f"<option value={n}>{n} {STEP_TITLES[n]} 부터 (지금 상태에서)</option>" for n in range(5, 10))
+    later = "".join(f"<option value={n}>{n} {STEP_TITLES[n]} 부터 (지금 상태에서)</option>" for n in range(5, GO_STEP + 1))
     learn_opts = first + later
     test_opts = first + "<option value=4>4 포스트잇 읽고 맞는 공 집기만</option>" + later
     color_opts = "<option value=auto>포스트잇 읽기 (자동)</option><option value=red>빨강 공</option><option value=blue>파랑 공</option>"
     return f"""
 <h1><span class="num g-prep">4</span>바구니 넣기 학습</h1>
-<p class=sub>실제 상차 순서대로 돌리면서 <b>5 바구니 위 · 6 바구니 안 · 7 집게 해제 · 8 성공 확인</b> 을 손으로 가르쳐요.
-회차마다 YOLO 사진과 모터 값이 저장되고, 여러 회차의 평균으로 실행해요. 2~4 · 9 · 10 은 프로그램이 알아서 해요.</p>
+<p class=sub>실제 상차 순서대로 돌리면서 <b>5 바구니 위 · 6 바구니 안 · 7 집게 해제 · 8 들어올리기 · 9 성공 확인</b> 을 손으로 가르쳐요.
+회차마다 YOLO 사진과 모터 값이 저장되고, 여러 회차의 평균으로 실행해요. 2~4 · 10 · 11 은 프로그램이 알아서 해요.</p>
 <p class=msg id=out role=status aria-live=polite>불러오는 중…</p>
 <div class=pl-grid>
  <div>
@@ -599,7 +603,7 @@ def place_body() -> str:
   <p><label><input type=checkbox id=noros> 차 통신 없이 (신호를 화면에만 표시. ROS2 가 없을 때 연습용)</label></p>
   <h2>학습</h2>
   <p><select id=lfrom aria-label='학습 시작 단계'>{learn_opts}</select> <select id=lcolor aria-label='학습 공 색'>{color_opts}</select></p>
-  <p class=small>5 이후부터는 지금 상태(공을 쥔 채)에서 시작해요. 6~8 부터면 앞 단계 값은 가장 최근 성공 회차에서 빌려 와요.</p>
+  <p class=small>5 이후부터는 지금 상태(공을 쥔 채)에서 시작해요. 6~9 부터면 앞 단계 값은 가장 최근 성공 회차에서 빌려 와요.</p>
   <p><button id=learn>▶ 학습 시작</button> <button id=stop style="background:#b3261e;border-color:#b3261e">■ 정지</button>
      <button id=cargo class=sec hidden>차 출발시키기 (공 없이)</button></p>
   <div id=nextbox class=msg hidden>
@@ -616,7 +620,7 @@ def place_body() -> str:
      5 이후부터 시작하면 팔이 공을 쥐고 있어야 하고 공 색을 골라야 해요.</p>
  </div>
 </div>
-<h2>① 가르치기 (5 바구니 위 · 6 바구니 안 · 7 집게 해제 · 8 성공 확인)</h2>
+<h2>① 가르치기 (5 바구니 위 · 6 바구니 안 · 7 집게 해제 · 8 들어올리기 · 9 성공 확인)</h2>
 <div class=pl-box>
  <p class=small id=teachhint></p>
  <p><button class=sec id=armoff>힘 빼기 (손으로 받치고!)</button> <button class=sec id=armon>힘 주기</button>
@@ -624,7 +628,8 @@ def place_body() -> str:
  <p>집게 <button class=sec data-grip=-5>조금 닫기 -5%</button> <button class=sec data-grip=5>조금 열기 +5%</button>
     <input type=range id=grip min=0 max=100 step=1 style="width:160px;vertical-align:middle" aria-label='집게 열림 %'> <b id=griptext>-</b></p>
  <p><button data-save=5>+ 5 바구니 위 저장</button> <button data-save=6>+ 6 바구니 안 저장</button>
-    <button data-save=7>+ 7 집게 해제 저장</button> <button data-save=8>+ 8 성공 확인 저장</button>
+    <button data-save=7>+ 7 집게 해제 저장</button> <button data-save=8>+ 8 들어올리기 저장</button>
+    <button data-save=9>+ 9 성공 확인 저장</button>
     <button class=sec id=draftclear>모두 비우기</button></p>
  <div class=pl-scroll><table class=pl-table>
   <thead><tr><th>순서</th><th>YOLO 사진</th><th>받침</th><th>어깨</th><th>팔꿈치</th><th>손목 꺾기</th><th>손목 돌리기</th><th>그리퍼 %</th><th>바구니 위치</th><th>저장 시각</th></tr></thead>
@@ -667,7 +672,7 @@ details.pl-take[open]>summary::before{content:'▼ '}
 def place_script(token: str) -> str:
     return """<script>
 const T='__TOKEN__';const $=id=>document.getElementById(id);let S=null,camBusy=false;
-const NAMES={above:'5 바구니 위',inside:'6 바구니 안',release:'7 집게 해제',check:'8 성공 확인'};
+const NAMES={above:'5 바구니 위',inside:'6 바구니 안',release:'7 집게 해제',lift:'8 들어올리기',check:'9 성공 확인'};
 const OPEN=new Set();let KNOWN=null,lastTakes='',lastDraft='',lastWatch='';
 document.addEventListener('toggle',e=>{const t=e.target;if(t.dataset&&t.dataset.tid){if(t.open)OPEN.add(t.dataset.tid);else OPEN.delete(t.dataset.tid)}},true);
 function num(v){return v==null?'-':v}
@@ -675,7 +680,7 @@ function rows(steps,img,extra){return Object.keys(NAMES).map(k=>{const s=steps[k
  if(!s)return '<tr class=empty><td><b>'+NAMES[k]+'</b></td><td colspan=9>아직 없음</td></tr>';
  const a=s.angles||{},src=img(k,s);
  return '<tr><td><b>'+NAMES[k]+'</b>'+(extra?extra(k):'')+'</td><td>'+(src?'<a target=_blank href="'+src+'"><img loading=lazy src="'+src+'" alt="'+NAMES[k]+' YOLO 사진"></a>':'<span class=small>(사진 없음)</span>')+'</td>'+
-  ['1','2','3','4','5'].map(j=>'<td>'+num(a[j])+'</td>').join('')+'<td>'+num(s.grip)+'</td><td>'+(s.basket?'x '+s.basket.cx+' · y '+s.basket.cy:'-')+'</td><td>'+(s.t||'-')+'</td></tr>'}).join('')}
+  ['1','2','3','4','5'].map(j=>'<td>'+num(a[j])+'</td>').join('')+'<td>'+num(s.grip)+'</td><td>'+(s.basket?'x '+s.basket.cx+' · y '+s.basket.cy:'-')+'</td><td>'+(s.filled?'<span class=warn>예전 회차: 5 값 사용</span>':(s.t||'-'))+'</td></tr>'}).join('')}
 function say(t,ok){const o=$('out');o.textContent=t;o.className='msg '+(ok===false?'bad':ok?'ok':'')}
 async function post(a,d){const r=await fetch('/api/place/'+a,{method:'POST',headers:{'Content-Type':'application/json','X-Hub-Token':T},body:JSON.stringify(d||{})});
  const j=await r.json().catch(()=>({message:'응답을 읽지 못했어요.'}));say(j.message,r.ok);refresh();return r.ok}
@@ -694,9 +699,9 @@ function render(d){S=d;const b=d.book;const sel=$('set');const keep=sel.value;
  document.querySelectorAll('[data-save]').forEach(x=>x.disabled=run?w!=='teach'+x.dataset.save:!set);
  ['armoff','armon','grip'].forEach(i=>$(i).disabled=moving);document.querySelectorAll('[data-grip]').forEach(x=>x.disabled=moving);
  const dr=d.draft||{},have=Object.keys(NAMES).filter(k=>dr[k]).length;
- $('draftclear').disabled=run||!have;$('takesave').disabled=run||!set||have<4;$('tresult').disabled=run;
+ $('draftclear').disabled=run||!have;$('takesave').disabled=run||!set||have<5;$('tresult').disabled=run;
  $('teachhint').textContent=run?(w.startsWith('teach')?'학습 중: 지금은 '+w.slice(5)+'단계 차례예요. 팔을 옮긴 뒤 [+ '+w.slice(5)+' … 저장] 을 누르세요. 저장하면 다음 단계로 넘어가요.':'학습 · 테스트가 도는 중이에요. 가르칠 차례가 오면 저장 버튼이 켜져요.')
-  :'학습을 돌리지 않아도 돼요: [힘 빼기] → 팔을 손으로 옮기기 → 단계 저장. 같은 단계를 다시 누르면 덮어써요. 네 단계가 모이면 [새 회차로 저장] ('+have+'/4).';
+  :'학습을 돌리지 않아도 돼요: [힘 빼기] → 팔을 손으로 옮기기 → 단계 저장. 같은 단계를 다시 누르면 덮어써요. 다섯 단계가 모이면 [새 회차로 저장] ('+have+'/5).';
  const dh=rows(dr,(k,s)=>s.img?'/img/placedraft/'+k+'.jpg?v='+d.draft_v:null);
  if(dh!==lastDraft){$('draftrows').innerHTML=dh;lastDraft=dh}
  $('nextbox').hidden=w!=='next';$('judge').textContent=d.judged===null?'':'YOLO 판정: '+(d.judged?'성공 (공이 든 바구니 보임)':'실패 (안 보임)');
@@ -724,7 +729,7 @@ function bindTakes(run){
  document.querySelectorAll('[data-rename]').forEach(x=>x.onclick=()=>{const n=prompt('새 회차 이름 (1~30자)');if(n)post('take-rename',{sid:sid(),tid:x.dataset.rename,label:n})});
  document.querySelectorAll('[data-del]').forEach(x=>x.onclick=()=>{if(confirm('이 회차를 지울까요? (백업이 남아요)'))post('take-delete',{sid:sid(),tid:x.dataset.del})});
  const wr=$('watchredo');if(wr){wr.disabled=run;wr.onclick=()=>{if(confirm('지금 팔 자세와 카메라 사진을 이 세트의 대기 자세로 다시 저장할까요?'))post('watch-redo',{sid:sid()})}}}
-$('draftclear').onclick=()=>{if(confirm('지금 묶음(5~8 저장한 것)을 모두 비울까요?'))post('draft-clear')};
+$('draftclear').onclick=()=>{if(confirm('지금 묶음(5~9 저장한 것)을 모두 비울까요?'))post('draft-clear')};
 $('takesave').onclick=()=>post('take-save',{sid:sid(),label:$('tname').value,success:$('tresult').value==='ok'}).then(ok=>{if(ok)$('tname').value=''});
 async function refresh(){try{render(await (await fetch('/api/place/state',{cache:'no-store'})).json())}catch(e){say('허브와 연결이 끊겼어요. 허브가 켜져 있는지 확인하세요.',false)}}
 function cam(){if(camBusy)return;camBusy=true;const i=new Image();i.onload=()=>{$('cam').src=i.src;camBusy=false;$('camtext').textContent='YOLO 인식 화면'};
@@ -734,11 +739,11 @@ $('setnew').onclick=()=>{const n=prompt('새 세트 이름 (비우면 자동)','
 $('setname').onclick=()=>{const n=prompt('세트 새 이름');if(n)post('set-rename',{sid:sid(),label:n})};
 $('setstar').onclick=()=>post('set-choose',{sid:sid()});
 $('setdel').onclick=()=>{if(confirm('세트와 그 안의 회차를 모두 지울까요? (백업이 남아요)'))post('set-delete',{sid:sid()})};
-function holding(f,c){if(f<5||f>8)return true;if(c==='auto'){say('5 이후부터는 팔이 쥔 공 색(빨강 / 파랑)을 골라 주세요.',false);return false}
+function holding(f,c){if(f<5||f>9)return true;if(c==='auto'){say('5 이후부터는 팔이 쥔 공 색(빨강 / 파랑)을 골라 주세요.',false);return false}
  return confirm('지금 팔이 '+(c==='red'?'빨간':'파란')+' 공을 쥐고 있나요?')}
-$('learn').onclick=()=>{const f=+$('lfrom').value,c=$('lcolor').value;if(S&&S.draft&&Object.keys(S.draft).length&&!confirm('① 가르치기에 회차로 저장하지 않은 값이 있어요. 학습을 시작하면 비워져요. 계속할까요?'))return;if(f===9&&c==='auto'){say('9 는 공 색(빨강 / 파랑)을 골라 주세요.',false);return}if(!holding(f,c))return;
+$('learn').onclick=()=>{const f=+$('lfrom').value,c=$('lcolor').value;if(S&&S.draft&&Object.keys(S.draft).length&&!confirm('① 가르치기에 회차로 저장하지 않은 값이 있어요. 학습을 시작하면 비워져요. 계속할까요?'))return;if(f===10&&c==='auto'){say('10 은 공 색(빨강 / 파랑)을 골라 주세요.',false);return}if(!holding(f,c))return;
  if(confirm(f===2?'팔이 대기 자세로 움직이고, 차가 오면 정지 신호를 보낸 뒤 공을 집어요. 주변을 비웠나요?':f+'단계부터 학습해요. 주변을 비웠나요?'))post('learn',{sid:sid(),start:f,color:c,no_ros:$('noros').checked})};
-$('test').onclick=()=>{const f=+$('from').value,c=$('color').value;if(f===9&&c==='auto'){say('9 는 공 색(빨강 / 파랑)을 골라 주세요.',false);return}if(!holding(f,c))return;
+$('test').onclick=()=>{const f=+$('from').value,c=$('color').value;if(f===10&&c==='auto'){say('10 은 공 색(빨강 / 파랑)을 골라 주세요.',false);return}if(!holding(f,c))return;
  if(confirm(f+'단계부터 자동으로 움직여요. 주변을 비웠나요?'))post('test',{sid:sid(),start:f,color:c,pause:$('pause').checked,no_ros:$('noros').checked})};
 $('stop').onclick=()=>post('stop');
 $('cargo').onclick=()=>{if(confirm('팔(집게)이 바구니에서 완전히 빠져 있나요? 차가 공 없이 출발해요.'))post('car-go')};
