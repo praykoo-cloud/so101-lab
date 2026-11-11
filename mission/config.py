@@ -144,6 +144,21 @@ class MissionConfig:
     place_servo_max_deg: float = 15.0           # 학습 자세에서 관절마다 이만큼까지만 더 움직인다 (안전)
     place_servo_seconds: float = 8.0            # 이 시간 안에 못 맞추면 그 시도는 실패
     place_servo_tilt_sign: int = 0              # 세로 맞추기 (어깨 2번): 0 = 안 함, 1 / -1 = 방향 ('저장 자세' 방식에서만)
+    # 바구니 찾아가 넣기 (학습 없이, 기본): 바구니를 화면 가운데로 → 화면의 50% 가 될 때까지 다가감 → 집게 열기 → 위로 → 성공 확인
+    place_seek: bool = True                     # 켜면 학습한 5~9 를 쓰지 않고 YOLO 로 바구니를 찾아가 넣는다
+    seek_area: float = 0.5                      # 바구니 네모가 화면의 이만큼(0~1)을 차지하면 '바구니 바로 위' 로 보고 집게를 연다
+    seek_center_px: float = 30.0                # 바구니 가운데가 화면 가운데에서 이 픽셀 안이면 '가운데'
+    seek_step_mm: float = 15.0                  # 가운데로 맞출 때 손끝을 한 번에 최대 이만큼(mm)
+    seek_down_mm: float = 15.0                  # 다가갈 때 한 번에 이만큼(mm) 아래로
+    seek_probe_mm: float = 15.0                 # 시작할 때 카메라 방향을 알려고 앞뒤 · 좌우로 움직여 보는 거리(mm)
+    seek_gain: float = 0.7                      # 한 번에 남은 거리의 몇 배를 옮길지 (작을수록 천천히)
+    seek_seconds: float = 30.0                  # 이 시간 안에 바구니 위에 못 가면 그 시도는 실패
+    seek_max_travel_mm: float = 200.0           # 시작 자리에서 옆으로 이만큼(mm) 넘게 가야 하면 실패 (안전)
+    seek_max_drop_mm: float = 250.0             # 시작 자리에서 이만큼(mm) 넘게는 내려가지 않는다 (안전)
+    seek_lift_mm: float = 50.0                  # 집게를 연 뒤 이만큼(mm) 위로 올라가서 성공을 확인한다
+    seek_drop_seconds: float = 0.8              # 집게를 연 뒤 공이 떨어질 때까지 기다리는 시간(초)
+    seek_final_tilt_deg: float = 5.0            # 다가가면서 집게를 이 각도(수직에서)까지 세운다 (공이 바구니에 곧게 떨어지게). 팔이 못 세우면 세울 수 있는 만큼만
+    seek_tilt_step_deg: float = 6.0             # 아래로 한 칸 갈 때마다 집게를 이만큼씩 세운다
     # YOLO 넣기 (5 바구니 위를 YOLO 로 맞추고, 6 은 수직으로 내려가고, 8 은 수직으로 올라온다)
     place_use_yolo: bool = True                 # 켜면 YOLO 넣기, 끄면 예전 '저장 자세' 방식 (학습한 모터 값 평균)
     place_step_mm: float = 10.0                 # 맞출 때 손끝을 한 번에 최대 이만큼(mm) 옮긴다

@@ -305,7 +305,7 @@ class SessionTest(unittest.TestCase):
         self.sid = self.book.create_set("a")
         self.cfg = MissionConfig(grip_ball_min_pct=20.0, grip_ball_max_pct=40.0, track_period=0.01,
                                  load_stop_confirm_seconds=0.1, load_verify_seconds=0.3, load_verify_hits=2,
-                                 place_servo_gain_deg_per_px=0.04)
+                                 place_servo_gain_deg_per_px=0.04, place_seek=False)   # 학습한 넣기 방식 시험
         self.ops = FakeOps()
         self.eye = SessionEye(self.ops)
         self.link = FakeLoadLink()
@@ -669,6 +669,129 @@ class YoloPlaceTest(unittest.TestCase):
         state, why = self.runner.yolo_above(self.book.learned(self.sid))
         self.assertIsNone(state)
         self.assertTrue("mm" in why or "보이지" in why, why)
+
+
+
+class CamEye:
+    """손목 카메라 흉내 (핀홀): 집게가 향하는 쪽을 보는 카메라. 바구니(12 cm 네모)가 가까울수록 크게 보인다"""
+    F = 500.0
+
+    def __init__(self, ops, basket_xyz, size=0.12):
+        self.ops, self.basket, self.size = ops, basket_xyz, size
+        self.loaded = False
+
+    def view(self):
+        import numpy as np
+        from soarm.kinematics import frames
+        from mission.place_reach import urdf_from_angles
+        F = dict(frames(urdf_from_angles(self.ops.a)))
+        tip = F["gripper_frame_joint"][:3, 3]
+        zc = -F["wrist_roll"][:3, 2]
+        xc = np.cross(zc, [0, 0, 1.0])
+        xc /= np.linalg.norm(xc)
+        yc = np.cross(zc, xc)
+        p = np.asarray(self.basket) - tip
+        depth = float(p @ zc)
+        if depth <= 0.01:
+            return None
+        u = 320 + self.F * float(p @ xc) / depth
+        v = 240 + self.F * float(p @ yc) / depth
+        half = self.F * self.size / depth / 2
+        x0, x1, y0, y1 = max(0, u - half), min(640, u + half), max(0, v - half), min(480, v + half)
+        if x1 <= x0 or y1 <= y0:
+            return None
+        return x0, y0, x1 - x0, y1 - y0, depth
+
+    def look(self):
+        got = self.view()
+        dets = []
+        if got is not None:
+            x, y, w, h, _ = got
+            dets.append(Det("success_blue" if self.loaded else "box", 0.9, x, y, w, h))
+        return Seen(dets, 640, 480)
+
+
+class SeekTest(unittest.TestCase):
+    """학습 없이 찾아가 넣기: 대기 자세에서 바구니를 가운데로 → 화면 50% 까지 다가감 → 열기 → 위로 → 성공"""
+
+    def setUp(self):
+        self.ops = KinOps({"1": -7.4, "2": -77.8, "3": 29.9, "4": 85.1, "5": -93.7})   # Pi 대기 자세 (앞으로 많이 기울어 있음)
+        self.eye = CamEye(self.ops, (0.28, 0.03, -0.05))
+        original = self.ops.grip
+        self.released_at = None
+
+        def grip(pct):
+            original(pct)
+            if pct > 50:
+                from mission.place_reach import tip_of
+                self.released_at = self.eye.view()
+                from mission.place_reach import lean_of, urdf_from_angles
+                self.drop_xy = tip_of(self.ops.a)[:2]                         # 공은 집게 아래로 떨어진다
+                self.drop_lean = lean_of(urdf_from_angles(self.ops.a))
+                self.eye.loaded = True
+        self.ops.grip = grip
+        self.cfg = MissionConfig(track_period=0.01, load_verify_seconds=0.3, load_verify_hits=2)
+        self.clock = Clock()
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.runner = PlaceRunner(self.cfg, self.ops, self.eye, FakeLoadLink(), MotionBook(Path(tmp.name) / "m.json", Path(tmp.name) / "b"),
+                                  clock=self.clock, sleep=self.clock.sleep, log=lambda *a, **k: None)
+
+    def run_seek(self):
+        seen = []
+        ok, why = self.runner.seek_place(on_step=lambda n, k, w: seen.append((n, k, w)))
+        return ok, why, seen
+
+    def test_finds_the_basket_fills_half_the_screen_releases_lifts_and_checks(self):
+        from mission.place_reach import lean_of, urdf_from_angles
+        lean0 = lean_of(urdf_from_angles(self.ops.a))
+        ok, why, seen = self.run_seek()
+        self.assertTrue(ok, seen)
+        self.assertEqual([(n, k) for n, k, _ in seen], [(5, True), (6, True), (7, True), (8, True), (9, True)])
+        x, y, w, h, depth = self.released_at
+        self.assertGreaterEqual(w * h / (640 * 480), 0.5)                          # 화면의 50% 이상
+        self.assertLess(abs(x + w / 2 - 320), 40)                                   # 바구니가 화면 가운데
+        self.assertLess(abs(y + h / 2 - 240), 40)
+        import math
+        self.assertLess(self.drop_lean, lean0)                                      # 다가가며 집게를 세웠다
+        self.assertLessEqual(self.drop_lean, math.sin(math.radians(self.cfg.seek_final_tilt_deg)) + 0.05)   # 놓을 때 거의 수직 (IK 허용 오차 0.05)
+        bx, by = self.eye.basket[:2]
+        self.assertLess(math.hypot(self.drop_xy[0] - bx, self.drop_xy[1] - by), 0.03)   # 공이 바구니 가운데 3 cm 안에 떨어짐
+        self.assertIn("50 mm", seen[3][2])                                          # 놓은 뒤 위로
+
+    def test_basket_not_visible_fails_without_moving_far(self):
+        self.eye.basket = (0.30, 0.6, -0.12)                                        # 화면 밖
+        ok, why, seen = self.run_seek()
+        self.assertFalse(ok)
+        self.assertIn("보이지 않아요", why)
+
+    def test_unreachable_goes_as_far_as_it_can_then_releases(self):
+        from mission import place_flow
+        from mission.place_reach import ReachError
+        original = place_flow.Reach.go
+        floor = {"z": None}
+
+        def go(reach, xyz, seed=None):
+            if floor["z"] is None:
+                floor["z"] = float(reach.now()[0][2]) - 0.05                      # 시작보다 5 cm 아래로는 팔이 안 닿음
+            if xyz[2] < floor["z"]:
+                raise ReachError("닿지 않음")
+            return original(reach, xyz, seed)
+        place_flow.Reach.go = go
+        self.addCleanup(setattr, place_flow.Reach, "go", original)
+        ok, why, seen = self.run_seek()
+        steps = {n: (k, w) for n, k, w in seen}
+        self.assertTrue(steps[6][0])
+        self.assertIn("여기서 집게를 열어요", steps[6][1])                           # 멈추지 않고 진행
+        self.assertTrue(steps[7][0])
+
+    def test_ball_still_in_gripper_is_not_success(self):
+        self.cfg.grip_ball_min_pct, self.cfg.grip_ball_max_pct = 20.0, 40.0
+        self.ops.grip = lambda pct: None                                            # 집게가 안 열림
+        self.eye.loaded = False
+        ok, why, seen = self.run_seek()
+        self.assertFalse(ok)
+        self.assertIn("아직 공을 쥐고", why)
 
 
 if __name__ == "__main__":

@@ -89,6 +89,8 @@ class PlaceSession:
         st["book"] = self.book.summary()
         st["fake"] = not getattr(self.robot, "real", True)
         st["yolo"] = bool(self.cfg.place_use_yolo)
+        st["seek"] = bool(self.cfg.place_seek)
+        st["seek_area"] = float(self.cfg.seek_area)
         return st
 
     def log(self, event, **kw):
@@ -138,7 +140,7 @@ class PlaceSession:
         if mode == "test":
             if start_step not in TEST_STARTS:
                 raise PlaceError("시작 단계를 다시 고르세요.")
-            if start_step != 4:
+            if start_step != 4 and not self.cfg.place_seek:          # 찾아가 넣기는 학습이 필요 없다
                 learned = self.book.learned(sid)
         elif mode == "learn":
             if start_step not in LEARN_STARTS:
@@ -397,7 +399,13 @@ class PlaceSession:
         self._result(4, ok, why + tail)
 
     def _auto(self, runner: PlaceRunner, learned: dict, start: int, maybe_pause) -> bool:
-        """5~9 자동. YOLO 넣기(카메라 방향을 잰 세트) 또는 저장 자세 방식"""
+        """5~9 자동. 바구니 찾아가기(기본, 학습 없이) · YOLO 넣기(카메라 방향을 잰 세트) · 저장 자세 방식"""
+        if self.cfg.place_seek:
+            if start <= 5:
+                self._say(5, "대기 자세(바구니가 보이는 자세)로 가서 바구니를 찾는 중…")
+                self._go_wait(runner)
+            ok, _why = runner.seek_place(on_step=self._result, start=max(5, start), before=maybe_pause)
+            return ok
         yolo = runner.yolo_ready(learned)
         if start <= 5:
             maybe_pause(5)
@@ -737,7 +745,7 @@ function render(d){S=d;const b=d.book;const sel=$('set');const keep=sel.value;
  document.querySelectorAll('[data-save]').forEach(x=>x.disabled=run?w!=='teach'+x.dataset.save:!set);
  ['armoff','armon','grip'].forEach(i=>$(i).disabled=moving);document.querySelectorAll('[data-grip]').forEach(x=>x.disabled=moving);
  $('cammeasure').disabled=run||!set||!set.used;
- $('camdir').textContent=!set?'':!d.yolo?'넣기 방식: 저장 자세 (설정에서 YOLO 넣기를 꺼 둠)':set.cam?'넣기 방식: YOLO 맞추기 · 카메라 방향 잰 때 '+set.cam.t:'넣기 방식: 저장 자세 (카메라 방향을 재면 YOLO 맞추기로 바뀌어요)';
+ $('camdir').textContent=!set?'':d.seek?'넣기 방식: 바구니 찾아가기 (학습 없이 · 화면 가운데 → 화면의 '+Math.round((d.seek_area||0.5)*100)+'% → 집게 열기)':!d.yolo?'넣기 방식: 저장 자세 (설정에서 YOLO 넣기를 꺼 둠)':set.cam?'넣기 방식: YOLO 맞추기 · 카메라 방향 잰 때 '+set.cam.t:'넣기 방식: 저장 자세 (카메라 방향을 재면 YOLO 맞추기로 바뀌어요)';
  const dr=d.draft||{},have=Object.keys(NAMES).filter(k=>dr[k]).length;
  $('draftclear').disabled=run||!have;$('takesave').disabled=run||!set||have<5;$('tresult').disabled=run;
  $('teachhint').textContent=run?(w.startsWith('teach')?'학습 중: 지금은 '+w.slice(5)+'단계 차례예요. 팔을 옮긴 뒤 [+ '+w.slice(5)+' … 저장] 을 누르세요. 저장하면 다음 단계로 넘어가요.':'학습 · 테스트가 도는 중이에요. 가르칠 차례가 오면 저장 버튼이 켜져요.')

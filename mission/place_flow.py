@@ -11,7 +11,15 @@
   9 성공 확인 자세 → '공이 든 상자' 가 보이면 성공
   10 성공: 대기 자세 → 출발 신호(SUCCESS)      11 실패: 4 부터 다시 (3번째 실패면 FAILED)
 
-넣기 방식 두 가지 (설정 place_use_yolo)
+넣기 방식 (설정)
+  바구니 찾아가기 (place_seek, 기본, 학습 필요 없음): seek_place()
+    시작 = 대기 자세(차 · 바구니가 보이는 자세). 시작할 때 손끝을 앞뒤 · 좌우로 조금 움직여 카메라 방향을 스스로 잰다.
+    5 바구니를 화면 가운데로 → 6 가운데를 지키며 아래로 다가가 바구니가 화면의 50% 이상 → 7 공을 쥐고 있는지 보고 집게 열기
+    → 8 5 cm 위로 → 9 집게가 열려 있고 '공이 든 바구니' 가 보이면 성공.
+    집게 기울기: 대기 자세는 앞을 보느라 많이 기울어 있다 (Pi 실측 약 57°). 그대로 놓으면 공이 바구니 앞에 떨어지므로
+    아래로 한 칸 갈 때마다 seek_tilt_step_deg 씩 세워 seek_final_tilt_deg(5°) 까지 세운 뒤 놓는다 (못 세우면 세울 수 있는 만큼).
+    팔이 더 못 가는 곳이면 멈추지 않고 거기서 집게를 연다.
+  아래 두 방식은 place_seek 를 끄면 쓴다 (place_use_yolo)
   YOLO 넣기 (기본): 5 = 집게를 아래로 향하고 손끝을 앞뒤 · 좌우로 옮겨 바구니를 학습한 픽셀 자리에 맞춤 (높이는 학습한 5 높이),
                     6 = 그 자리에서 학습한 깊이(5 와 6 의 높이 차)만큼 수직으로 내려감, 8 = 수직으로 다시 올라옴.
                     세트마다 한 번 '카메라 방향 재기' 가 필요하다 (measure_camera)
@@ -52,6 +60,7 @@ class FlowAbort(RuntimeError):
 class Seen:
     dets: list
     width: int
+    height: int = 480
 
 
 class YoloEye:
@@ -77,7 +86,7 @@ class YoloEye:
             dets = self.detector.detect(frame)
         self.last_frame, self.last_dets, self._jpeg = frame, dets, None
         self.looked_at = time.monotonic()
-        return Seen(dets, frame.shape[1])
+        return Seen(dets, frame.shape[1], frame.shape[0])
 
     def jpeg(self) -> bytes | None:
         if self._jpeg is None and self.last_frame is not None:
@@ -554,6 +563,222 @@ class PlaceRunner:
         """6 · 7 · 8 · 9 (번호, 실행 함수) — 저장 자세 방식"""
         return ((6, lambda: self.step_inside(learned, corr)), (7, lambda: self.step_release(learned, corr)),
                 (8, lambda: self.step_lift(learned, corr)), (9, lambda: self.step_check(learned, corr)))
+
+    # ── 바구니 찾아가 넣기 (학습 없이) ─────────────────────────────────
+    def _feat(self):
+        """(가로 차이 px, 세로 차이 px, 넓이 비율 0~1) — 바구니 네모를 화면 가운데와 비교. 못 찾으면 None"""
+        seen = self.eye.look()
+        box = pick_best(seen.dets, BASKET_NAMES) if seen else None
+        if box is None:
+            return None
+        w, h = float(seen.width), float(getattr(seen, "height", 0) or 480)
+        return box.cx - w / 2, box.cy - h / 2, (box.w * box.h) / (w * h)
+
+    def _feat_avg(self, n: int = 3):
+        got = []
+        for _ in range(n * 3):
+            self.check()
+            f = self._feat()
+            if f is not None:
+                got.append(f)
+                if len(got) >= n:
+                    break
+            self.sleep(0.05)
+        if not got:
+            return None
+        return tuple(sum(v[i] for v in got) / len(got) for i in range(3))
+
+    def _probe(self, reach: Reach, tip, q) -> tuple[list, float]:
+        """손끝을 앞뒤 · 좌우로 조금 움직여 '손끝 1 m 당 바구니가 화면에서 움직이는 픽셀' 2×2 를 잰다. (행렬, 그때 넓이 비율)"""
+        d = self.cfg.seek_probe_mm / 1000.0
+        f0 = self._feat_avg()
+        if f0 is None:
+            raise ReachError("바구니가 카메라에 보이지 않아요 (대기 자세에서 차 위 바구니가 보여야 해요)")
+        cols = []
+        for axis in (0, 1):
+            for step in (d, -d):                              # 한쪽으로 팔이 닿지 않으면 반대쪽으로
+                moved = tip.copy()
+                moved[axis] += step
+                try:
+                    reach.go(moved, q)
+                except ReachError:
+                    continue
+                break
+            else:
+                raise ReachError("팔이 바구니 쪽으로 조금도 움직일 수 없는 자세예요. 대기 자세를 팔이 덜 뻗은 자세로 다시 저장하세요")
+            f1 = self._feat_avg()
+            reach.go(tip, q)
+            if f1 is None:
+                raise ReachError("카메라 방향을 재는 동안 바구니가 화면에서 사라졌어요. 설정의 '카메라 방향 재는 거리' 를 줄이세요")
+            cols.append(((f1[0] - f0[0]) / step, (f1[1] - f0[1]) / step))
+        m = [[cols[0][0], cols[1][0]], [cols[0][1], cols[1][1]]]
+        if abs(m[0][0] * m[1][1] - m[0][1] * m[1][0]) < 1e3:
+            raise ReachError("손끝을 움직여도 바구니가 화면에서 거의 안 움직였어요. 카메라 · 바구니가 잘 보이는지 확인하세요")
+        self.log("seek_probe", m=[[round(v) for v in row] for row in m])
+        return m, f0[2]
+
+    def _seek(self, reach: Reach, q, report) -> tuple[bool, str, list]:
+        """5 · 6) 바구니를 화면 가운데로 맞추고, 가운데를 지키며 아래로 다가가 바구니가 화면의 seek_area 이상이 되게"""
+        cfg = self.cfg
+        start, q = reach.now()
+        try:
+            m, area0 = self._probe(reach, start, q)
+        except ReachError as e:
+            report(5, False, str(e))
+            return False, str(e), q
+        xyz = start.copy()
+        t0 = self.clock()
+        missed, centered_once, stuck_xy, stuck_down, stuck_tilt = 0, False, False, False, False
+        final_lean = math.sin(math.radians(cfg.seek_final_tilt_deg))
+        lean_step = math.sin(math.radians(cfg.seek_tilt_step_deg))
+
+        def upright() -> bool:
+            return reach.lean <= final_lean + 1e-3 or stuck_tilt
+
+        while True:
+            self.check()
+            if self.clock() - t0 > cfg.seek_seconds:
+                why = f"{cfg.seek_seconds:g}초 안에 바구니 위로 가지 못했어요"
+                report(5 if not centered_once else 6, False, why)
+                return False, why, q
+            f = self._feat()
+            if f is None:
+                missed += 1
+                if missed >= 10:
+                    why = "다가가는 동안 바구니가 카메라에 안 보여요"
+                    report(5 if not centered_once else 6, False, why)
+                    return False, why, q
+                self.sleep(self.cfg.track_period)
+                continue
+            missed = 0
+            ex, ey, area = f
+            centered = abs(ex) <= cfg.seek_center_px and abs(ey) <= cfg.seek_center_px
+            if centered and not centered_once:
+                centered_once = True
+                report(5, True, f"바구니를 화면 가운데로 맞췄어요 (가로 {ex:+.0f}, 세로 {ey:+.0f} 픽셀)")
+            done = area >= cfg.seek_area and (centered or stuck_xy) and upright()
+            if done or (stuck_down and (centered or stuck_xy) and upright()):
+                if not centered_once:
+                    report(5, True, f"가운데를 다 못 맞췄지만 진행해요 (팔이 더 못 감 · 가로 {ex:+.0f}, 세로 {ey:+.0f} 픽셀)")
+                note = "" if done else " — 팔이 더 못 내려가서 여기서 집게를 열어요"
+                self.log("seek_ok", area=round(area, 2), ex=round(ex), ey=round(ey), xyz=[round(float(v), 3) for v in xyz])
+                report(6, True, f"바구니가 화면의 {area * 100:.0f}% 를 차지해요 (바구니 바로 위){note}")
+                return True, "", q
+            scale = math.sqrt(max(area, 1e-4) / max(area0, 1e-4))   # 가까워질수록 같은 거리에 화면에서 더 많이 움직인다
+            if not centered and not stuck_xy:
+                a, b, c, d = (v * scale for v in (m[0][0], m[0][1], m[1][0], m[1][1]))
+                det = a * d - b * c
+                dx = -(d * ex - b * ey) / det * cfg.seek_gain
+                dy = -(-c * ex + a * ey) / det * cfg.seek_gain
+                size = math.hypot(dx, dy)
+                limit = cfg.seek_step_mm / 1000.0
+                if size > limit:
+                    dx, dy = dx * limit / size, dy * limit / size
+                goal = xyz.copy()
+                goal[0] += dx
+                goal[1] += dy
+                if math.hypot(goal[0] - start[0], goal[1] - start[1]) * 1000 > cfg.seek_max_travel_mm:
+                    why = (f"바구니를 따라 옆으로 {cfg.seek_max_travel_mm:g} mm 넘게 가야 해서 멈췄어요 "
+                           "(바구니가 너무 멀거나, 카메라 방향을 잘못 잰 것 같아요)")
+                    report(5 if not centered_once else 6, False, why)
+                    return False, why, q
+                try:
+                    q = reach.go(goal, q)
+                    xyz = goal
+                except ReachError:
+                    stuck_xy = True                              # 옆으로는 더 못 감 → 아래로만
+            else:
+                # 가운데 → 아래로 한 칸 (집게도 조금씩 세운다). 바구니가 이미 충분히 크면 그 자리에서 집게만 세운다
+                old = reach.lean
+                new = max(final_lean, old - lean_step)
+                goal = xyz.copy()
+                if area < cfg.seek_area and not stuck_down:
+                    goal[2] -= cfg.seek_down_mm / 1000.0
+                    if (start[2] - goal[2]) * 1000 > cfg.seek_max_drop_mm:
+                        stuck_down = True
+                        goal = xyz.copy()
+                tries = [(goal, new), (goal, old)] if goal[2] != xyz[2] else []
+                if new < old - 1e-6:
+                    tries.append((xyz.copy(), new))              # 내려가지 못하면 그 자리에서 세우기만
+                moved = False
+                for g, lean in tries:
+                    reach.lean = lean
+                    try:
+                        q = reach.go(g, q)
+                    except ReachError:
+                        continue
+                    if g[2] < xyz[2]:
+                        stuck_xy = False                         # 높이가 바뀌면 옆으로 다시 시도
+                    xyz, moved = g, True
+                    break
+                else:
+                    reach.lean = old
+                if not moved:
+                    if goal[2] < xyz[2]:
+                        stuck_down = True
+                    if new < old - 1e-6:
+                        stuck_tilt = True
+                    if not tries or (stuck_down and (stuck_tilt or new >= old - 1e-6)):
+                        stuck_down, stuck_tilt = True, True
+
+    def seek_place(self, on_step=None, start: int = 5, before=None) -> tuple[bool, str]:
+        """학습 없이 넣기 (5~9). 지금 자세(보통 대기 자세)에서 시작. on_step(번호, 성공?, 설명), before(번호) = 단계 전에 부름"""
+        cfg = self.cfg
+        report = on_step or (lambda *a: None)
+        wait = before or (lambda n: None)
+        reach = Reach(self.ops, lean_of(urdf_from_angles(self.ops.angles())))
+        lean0 = reach.lean                                    # 시작(대기) 자세의 기울기
+        q = reach.now()[1]
+        if start <= 6:
+            wait(5)
+            ok, why, q = self._seek(reach, q, report)
+            if not ok:
+                return False, why
+        if start <= 7:
+            wait(7)
+            self.check()
+            ok, why = self.holding()
+            if not ok:
+                report(7, False, why)
+                return False, why
+            self.ops.grip(cfg.grip_open_pct)
+            self.pause(cfg.seek_drop_seconds)
+            report(7, True, f"집게를 {cfg.grip_open_pct:g}% 로 열었어요")
+        if start <= 8:
+            wait(8)
+            tip, q = reach.now()
+            n = 3
+            up = 0.0
+            step_lean = math.sin(math.radians(cfg.seek_tilt_step_deg))
+            for i in range(1, n + 1):
+                self.check()
+                goal = tip.copy()
+                goal[2] += cfg.seek_lift_mm / 1000.0 * i / n
+                lean = reach.lean
+                while True:                                   # 곧게 못 올라가면 집게를 조금씩 다시 기울이며 (대기 자세 기울기까지)
+                    reach.lean = lean
+                    try:
+                        q = reach.go(goal, q)
+                        up = cfg.seek_lift_mm * i / n
+                        break
+                    except ReachError:
+                        if lean >= lean0 - 1e-6:
+                            lean = None
+                            break
+                        lean = min(lean0, lean + step_lean)
+                if lean is None:
+                    break
+            report(8, True, f"집게를 연 채로 {up:.0f} mm 위로 올라왔어요" + ("" if up >= cfg.seek_lift_mm - 0.5 else " (팔이 더 못 올라감)"))
+        wait(9)
+        self.check()
+        if cfg.grip_ball_max_pct > 0 and band_ok(cfg, self.ops.grip_pct()):
+            why = "집게가 아직 공을 쥐고 있어요 (놓지 못함 → 실패)"
+            report(9, False, why)
+            return False, why
+        ok = self.basket_has_ball()
+        why = "공이 든 바구니가 보여요 (성공)" if ok else "공이 든 바구니가 안 보여요 (실패)"
+        report(9, ok, why)
+        return ok, why
 
     def auto_place(self, learned: dict, on_step=None) -> tuple[bool, str]:
         """5 → 6 → 7 → 8 → 9 자동. on_step(번호, 성공?, 설명) 을 단계마다 부른다"""

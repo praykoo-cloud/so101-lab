@@ -197,9 +197,9 @@ class HubTest(unittest.TestCase):
         status, out = self.post("/api/place/set-create", {"label": "기본_세트"})
         self.assertEqual(status, 200, out)
         sid = json.loads(self.get("/api/place/state")[1])["book"]["chosen"]
-        status, out = self.post("/api/place/test", {"sid": sid, "start": 5, "color": "red", "no_ros": True})
+        status, out = self.post("/api/place/test", {"sid": sid, "start": 5, "color": "auto", "no_ros": True})
         self.assertEqual(status, 400)
-        self.assertIn("✔ 사용 회차가 없어요", out["message"])                       # 학습 전에는 테스트 못 함
+        self.assertIn("공 색", out["message"])                                       # 5 부터는 쥔 공 색을 골라야
         status, out = self.post("/api/place/save", {"step": 5})                   # 학습을 안 돌려도 언제든 저장
         self.assertEqual(status, 200, out)
         state = json.loads(self.get("/api/place/state")[1])

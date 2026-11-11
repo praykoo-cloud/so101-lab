@@ -65,6 +65,7 @@ class LoadAbort(RuntimeError):
 class Seen:
     dets: list
     width: int
+    height: int = 480
 
 
 @dataclass
@@ -128,7 +129,7 @@ class Loader:
         if self.cfg.load_use_tracking:
             if self.book.car_ref_pan() is None:
                 probs.append("'기준 차 위치' 가 저장되지 않았어요 (허브 3번 ⑤).")
-        else:
+        elif not self.cfg.place_seek:                          # 찾아가 넣기(기본)는 학습이 필요 없다
             try:
                 if self.places is None:
                     raise PlaceError("바구니 넣기 학습 파일을 읽지 못했어요.")
@@ -157,7 +158,7 @@ class Loader:
             if color is None:
                 self.log("no_color", msg="포스트잇 색을 읽지 못했어요 → 공 없이 출발시킵니다")
                 return result
-            learned = self.places.learned(self.places.chosen_set())
+            learned = None if self.cfg.place_seek else self.places.learned(self.places.chosen_set())
             for n in range(1, self.cfg.attempts_max + 1):
                 if self.car_left_early():
                     self.log("car_left_early", msg="차가 먼저 떠났어요 → 중단")
@@ -166,7 +167,12 @@ class Loader:
                 self.log("attempt", n=n, color=color)
                 ok, why = runner.pick(color)
                 if ok:
-                    ok, why = runner.auto_place(learned, on_step=lambda num, k, w: self.log("step", n=num, ok=k, why=w))
+                    step_log = lambda num, k, w: self.log("step", n=num, ok=k, why=w)
+                    if self.cfg.place_seek:
+                        runner.ops.go_wait()                         # 바구니가 보이는 대기 자세에서 찾아간다
+                        ok, why = runner.seek_place(on_step=step_log)
+                    else:
+                        ok, why = runner.auto_place(learned, on_step=step_log)
                 self.log("attempt_result", n=n, ok=ok, why=why)
                 if ok:
                     result = "success"

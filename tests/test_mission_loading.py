@@ -381,7 +381,8 @@ class NewFlowTest(unittest.TestCase):
         self.places.add_take(sid, {"above": snap(0.0, cx=WIDTH / 2), "inside": snap(-20.0), "release": snap(-20.0, 80.0),
                                    "lift": snap(0.0, 80.0), "check": snap(5.0)}, {}, success=True)
         self.cfg = MissionConfig(grip_ball_min_pct=20.0, grip_ball_max_pct=40.0, track_period=0.1,
-                                 load_retry_wait_seconds=1.0, load_leave_timeout=10.0, place_servo_gain_deg_per_px=0.04)
+                                 load_retry_wait_seconds=1.0, load_leave_timeout=10.0, place_servo_gain_deg_per_px=0.04,
+                                 place_seek=False)                                 # 학습한 넣기 방식 시험
         self.link = FakeLoadLink()
         self.events = []
 
