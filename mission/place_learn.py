@@ -234,6 +234,18 @@ class PlaceBook:
         self.save()
         return saved
 
+    def latest_success(self, sid: str) -> tuple[str, dict] | None:
+        """가장 최근의 성공 회차 (tid, 회차). 없으면 None. 6~8 부터 학습할 때 앞 단계 값을 여기서 빌린다"""
+        takes = [(tid, t) for tid, t in self.get_set(sid)["takes"].items() if t.get("success")]
+        if not takes:
+            return None
+        return max(takes, key=lambda item: int(item[0][1:]))
+
+    def step_image(self, sid: str, snap: dict) -> bytes | None:
+        """저장된 단계 사진의 JPEG bytes (없으면 None)"""
+        path = self.image_path(sid, snap.get("image") or "")
+        return None if path is None else path.read_bytes()
+
     # ── 학습 값 (실행 · 테스트가 쓰는 기준) ────────────────────────────
     def learned(self, sid: str) -> dict:
         """✔ 사용 회차들의 평균. 없으면 PlaceError"""

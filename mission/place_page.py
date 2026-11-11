@@ -9,7 +9,12 @@
   5 바구니 위 · 6 바구니 안 · 7 집게 해제 · 8 성공 확인 자세 (사람이 손으로 옮기고 저장)
   8 에서만 [다음 단계 진행] → 9 성공이면 대기 자세 + 출발 신호 / 10 실패면 공을 받침대에 놓고 [공 놓았어요] → 4 부터
 
-테스트: 학습한 세트로 2~8 중 고른 단계부터 끝까지 자동 (5 이후부터면 공을 쥐고 있어야 한다)
+시작 번호 (학습 · 테스트 모두, 고른 번호부터 '지금 상태' 에서 이어서 한다)
+  2~4 : 처음부터 (대기 자세 · 차 기다림 · 정지 · 색 · 공 집기)
+  4   : (테스트만) 포스트잇을 읽고 그 색에 맞는 공(빨강 = 빨간공_집기, 파랑 = 파란공_집기)을 집기까지만. 차 신호는 안 보낸다
+  5~8 : 팔이 공을 쥐고 있는 상태에서 그 단계부터 (색을 골라야 한다). 학습을 6~8 부터 하면 앞 단계 값은 가장 최근 성공 회차에서 빌린다
+  9   : 대기 자세로 가서 출발 신호(SUCCESS) 만
+색: 자동(포스트잇 읽기) · 빨강 · 파랑. 2~4 에서 빨강 / 파랑을 고르면 포스트잇 읽기를 건너뛰고 그 색 공을 집는다
 
 안전
 - 5 · 6 · 8 에서는 팔(1~5번)만 힘을 뺀다. 집게(6번)는 힘을 유지해서 쥔 공이 떨어지지 않는다. 팔을 손으로 받칠 것!
@@ -22,9 +27,12 @@ import threading
 import time
 
 from .place_flow import ArmOps, FlowAbort, FlowStopped, PlaceRunner
-from .place_learn import STEP_LABELS, STEPS, PlaceBook, PlaceError, make_snap
+from .place_learn import STEP_LABELS, STEP_NUM, STEPS, PlaceBook, PlaceError, make_snap
 
 TEACH_STEPS = {5: "above", 6: "inside", 7: "release", 8: "check"}
+LEARN_STARTS = (2, 5, 6, 7, 8, 9)
+TEST_STARTS = (2, 4, 5, 6, 7, 8, 9)               # 테스트 4 = 포스트잇 읽고 맞는 공 집기만
+COLOR_NAMES = {"red": "빨간", "blue": "파란"}
 STEP_TITLES = {2: "대기 자세 · 차 기다림", 3: "정차 신호 · 완전 정차", 4: "색 읽기 · 공 집기", 5: "바구니 위", 6: "바구니 안",
                7: "집게 해제", 8: "성공 확인", 9: "성공 → 출발 신호", 10: "실패 → 4번부터 다시"}
 
@@ -122,18 +130,25 @@ class PlaceSession:
         self._need_idle()
         self.book.get_set(sid)
         learned = None
+        color = color if color in ("red", "blue") else None          # 그 밖(auto 등) = 포스트잇을 읽는다
         if mode == "test":
-            learned = self.book.learned(sid)
-            if start_step not in range(2, 9):
-                raise PlaceError("시작 단계는 2~8 중에서 고르세요.")
-            if start_step >= 5 and color not in ("red", "blue"):
-                raise PlaceError("5단계 이후부터 시작하면 공 색(빨강 / 파랑)을 골라 주세요.")
-        elif mode != "learn":
+            if start_step not in TEST_STARTS:
+                raise PlaceError("시작 단계를 다시 고르세요.")
+            if start_step != 4:
+                learned = self.book.learned(sid)
+        elif mode == "learn":
+            if start_step not in LEARN_STARTS:
+                raise PlaceError("시작 단계를 다시 고르세요.")
+            if 6 <= start_step <= 8 and self.book.latest_success(sid) is None:
+                raise PlaceError("6~8 부터 학습하려면 앞 단계 값을 빌려 올 성공 회차가 있어야 해요. 먼저 2~4 나 5 부터 한 번 학습하세요.")
+        else:
             raise PlaceError("모드를 다시 고르세요.")
+        if start_step >= 5 and color is None:
+            raise PlaceError("5단계 이후부터 시작하면 팔이 쥔 공 색(빨강 / 파랑)을 골라 주세요.")
         if self.ops.too_hot():
             raise PlaceError("모터가 뜨거워요. 식힌 뒤에 다시 하세요.")
         self.reset_status()
-        self.status.update(mode=mode, set=sid, color=color if start_step >= 5 else None)
+        self.status.update(mode=mode, set=sid, color=color)
         self.link = link
         self._stop.clear()
         target = self._run_learn if mode == "learn" else self._run_test
@@ -193,8 +208,8 @@ class PlaceSession:
         else:
             self._say(10, f"{self.cfg.attempts_max}번 모두 실패해서 차에게 FAILED(공 없이 출발)를 보냈어요. {why}".strip(), True)
 
-    def _car_and_color(self, runner: PlaceRunner, sid: str | None) -> str | None:
-        """2 · 3 · 4(색). 실패하면 None"""
+    def _car_and_color(self, runner: PlaceRunner, sid: str | None, color: str | None = None) -> str | None:
+        """2 · 3 · 4(색). color 를 골랐으면 포스트잇 읽기는 건너뛴다. 실패하면 None"""
         self._say(2, "대기 자세로 가는 중…")
         self._go_wait(runner)
         self.link.set("WAITING", "", 0)
@@ -206,6 +221,9 @@ class PlaceSession:
             self.link.set("FAILED")
             return None
         self._result(3, True, "차와 상자를 보고 정지 신호를 보냈고, 완전히 섰어요")
+        if color is not None:
+            self._say(4, f"고른 색: 포스트잇 읽기를 건너뛰고 {COLOR_NAMES[color]}공을 집어요")
+            return color
         return self._read_color(runner)
 
     def _read_color(self, runner: PlaceRunner) -> str | None:
@@ -216,6 +234,7 @@ class PlaceSession:
             self.link.set("FAILED")
             return None
         self.status["color"] = color
+        self._say(4, f"포스트잇 {'빨강' if color == 'red' else '파랑'} → {COLOR_NAMES[color]}공을 집어요")
         return color
 
     def _pick(self, runner: PlaceRunner, color: str, attempt: int) -> bool:
@@ -235,30 +254,65 @@ class PlaceSession:
         return True
 
     # ── 학습 ────────────────────────────────────────────────────────────
-    def _run_learn(self, sid, _learned, _start, _pause):
+    def _hold_car(self, color: str, attempt: int = 1):
+        """5 이후부터 시작: 차가 이미 서 있다고 보고 계속 세워 둔다"""
+        self.status["attempt"] = attempt
+        self.link.set("IN_PROGRESS", color, attempt)
+
+    def _run_learn(self, sid, _learned, start, _pause):
         runner = self._runner()
-        color = self._car_and_color(runner, sid)
-        if color is None:
-            return self._go_wait(runner)
+        color = self.status["color"]
+        if start == 9:
+            self._hold_car(color)
+            return self._finish(runner, True)
+        if start == 2:
+            color = self._car_and_color(runner, sid, color)
+            if color is None:
+                return self._go_wait(runner)
         for attempt in range(1, self.cfg.attempts_max + 1):
             success = False
-            if self._pick(runner, color, attempt):
-                success = self._teach(runner, sid, color)
+            if attempt == 1 and start >= 5:
+                self._hold_car(color)                    # 지금 상태(공을 쥔 채)에서 바로 가르치기
+                ok = True
+            else:
+                ok = self._pick(runner, color, attempt)
+            if ok:
+                success = self._teach(runner, sid, color, start if attempt == 1 else 5)
             if success:
                 return self._finish(runner, True)
             if not self._after_fail(runner, attempt):
                 break
         self._finish(runner, False)
 
-    def _teach(self, runner: PlaceRunner, sid: str, color: str) -> bool:
+    def _draft_status(self):
+        self.status["draft"] = {k: {"angles": v["angles"], "grip": v["grip"], "basket": v["basket"]} for k, v in self.draft.items()}
+
+    def _teach(self, runner: PlaceRunner, sid: str, color: str, first: int = 5) -> bool:
+        """first 단계부터 손으로 가르친다. first 가 6~8 이면 앞 단계는 가장 최근 성공 회차에서 빌린다"""
         self.draft, self.images = {}, {}
-        self.status["draft"] = {}
+        if first > 5:
+            found = self.book.latest_success(sid)
+            if found is None:
+                raise PlaceError("앞 단계 값을 빌려 올 성공 회차가 없어요.")
+            _tid, take = found
+            for step in STEPS:
+                if STEP_NUM[step] < first:
+                    snap = take["steps"][step]
+                    self.draft[step] = make_snap(snap["angles"], snap.get("grip"), snap.get("basket"), None)
+                    self.images[step] = self.book.step_image(sid, snap)
+            self._say(first, f"5~{first - 1} 단계는 '{take['label']}' 값을 빌려 왔어요. 지금 자세에서 {first}단계부터 가르쳐요.")
+        self._draft_status()
         self.ops.torque_arm(False)
         self.status["arm_torque"] = False
-        self._wait_user("teach5", "5 바구니 위: 팔을 손으로 받치고 집게가 바구니 바로 위에 오게 옮긴 뒤 [5 저장] (집게는 힘이 들어가 있어 공을 쥐고 있어요)")
-        self._wait_user("teach6", "6 바구니 안: 집게를 바구니 안으로 내린 뒤 [6 저장]")
-        self._wait_user("teach7", "7 집게 해제: [팔 고정] 으로 팔을 멈춘 뒤 [조금 열기] 로 공을 놓고 [7 저장]")
-        self._wait_user("teach8", "8 성공 확인: [팔 힘 빼기] 후 바구니가 보이는 자세로 옮기고 [8 저장]")
+        prompts = (
+            (5, "5 바구니 위: 팔을 손으로 받치고 집게가 바구니 바로 위에 오게 옮긴 뒤 [5 저장] (집게는 힘이 들어가 있어 공을 쥐고 있어요)"),
+            (6, "6 바구니 안: 집게를 바구니 안으로 내린 뒤 [6 저장]"),
+            (7, "7 집게 해제: [팔 고정] 으로 팔을 멈춘 뒤 [조금 열기] 로 공을 놓고 [7 저장]"),
+            (8, "8 성공 확인: [팔 힘 빼기] 후 바구니가 보이는 자세로 옮기고 [8 저장]"),
+        )
+        for num, text in prompts:
+            if num >= first:
+                self._wait_user(f"teach{num}", text)
         self.ops.torque_arm(True)
         self.status["arm_torque"] = True
         self._say(8, "공이 든 바구니가 보이는지 확인하는 중…")
@@ -287,25 +341,23 @@ class PlaceSession:
                 self._wait_user("continue", f"{step}단계 '{STEP_TITLES[step]}' 를 할 차례예요. [계속] 을 누르면 진행해요.")
 
         color = self.status["color"]
-        if start <= 3:
+        if start == 4:
+            return self._pick_only(runner, color)
+        if start == 9:
+            self._hold_car(color)
+            return self._finish(runner, True)
+        if start == 2:
             maybe_pause(2)
-            if start == 3:
-                self.link.set("WAITING", "", 0)
-            color = self._car_and_color(runner, None) if start == 2 else self._stop_here_and_color(runner)
+            color = self._car_and_color(runner, None, color)
             if color is None:
                 return self._go_wait(runner)
         attempt = 1
         while True:
-            if start <= 4 or attempt > 1:
+            if start == 2 or attempt > 1:
                 maybe_pause(4)
-                if color is None:
-                    color = self._read_color(runner)
-                    if color is None:
-                        return self._go_wait(runner)
                 ok = self._pick(runner, color, attempt)
             else:
-                self.status["attempt"] = attempt
-                self.link.set("IN_PROGRESS", color, attempt)
+                self._hold_car(color, attempt)
                 ok = True
             if ok:
                 ok = self._auto(runner, learned, start if attempt == 1 else 5, maybe_pause)
@@ -315,14 +367,21 @@ class PlaceSession:
                 return self._finish(runner, False)
             attempt += 1
 
-    def _stop_here_and_color(self, runner: PlaceRunner) -> str | None:
-        self._say(3, "지금 자세에서 차와 상자를 찾는 중…")
-        if not runner.wait_car_and_stop():
-            self._result(3, False, "정지 신호를 냈지만 차가 서지 않았어요")
-            self.link.set("FAILED")
-            return None
-        self._result(3, True, "정지 신호 → 완전 정차")
-        return self._read_color(runner)
+    def _pick_only(self, runner: PlaceRunner, color: str | None):
+        """테스트 4: 포스트잇을 읽고(또는 고른 색) 그 색에 맞는 공을 집기까지만. 차 신호는 건드리지 않는다"""
+        if color is None:
+            self._say(4, "포스트잇 색을 읽는 중…")
+            color = runner.read_color()
+            if color is None:
+                return self._result(4, False, "포스트잇 색을 읽지 못했어요. 포스트잇이 카메라에 보이는지 확인하세요.")
+            self.status["color"] = color
+            self._say(4, f"포스트잇 {'빨강' if color == 'red' else '파랑'} → {COLOR_NAMES[color]}공을 집어요")
+        else:
+            self._say(4, f"고른 색: {COLOR_NAMES[color]}공을 집어요")
+        ok, why = runner.pick(color)
+        self.status["arm_torque"] = True
+        tail = f" ({COLOR_NAMES[color]}공을 쥔 채 멈췄어요. 이어서 5부터 테스트할 수 있어요)" if ok else ""
+        self._result(4, ok, why + tail)
 
     def _auto(self, runner: PlaceRunner, learned: dict, start: int, maybe_pause) -> bool:
         corr = {j: 0.0 for j in ("1", "2", "3", "4", "5")}
@@ -429,7 +488,7 @@ class PlaceSession:
             snap = make_snap(self.ops.angles(), self.ops.grip_pct(), basket, None)
         self.draft[step] = snap
         self.images[step] = self.eye.jpeg()
-        self.status["draft"] = {k: {"angles": v["angles"], "grip": v["grip"], "basket": v["basket"]} for k, v in self.draft.items()}
+        self._draft_status()
         self._answer(f"teach{num}")
         return f"{STEP_LABELS[step]} 저장 (사진 + 모터 값)."
 
@@ -477,7 +536,11 @@ class PlaceSession:
 # ── 화면 ────────────────────────────────────────────────────────────────
 def place_body() -> str:
     step_rows = "".join(f"<li data-step={n}><b>{n}</b> {name}</li>" for n, name in STEP_TITLES.items())
-    test_opts = "".join(f"<option value={n}>{n} {STEP_TITLES[n]} 부터</option>" for n in range(2, 9))
+    first = "<option value=2>2~4 처음부터 (대기 · 차 · 정지 · 색 · 공 집기)</option>"
+    later = "".join(f"<option value={n}>{n} {STEP_TITLES[n]} 부터 (지금 상태에서)</option>" for n in range(5, 10))
+    learn_opts = first + later
+    test_opts = first + "<option value=4>4 포스트잇 읽고 맞는 공 집기만</option>" + later
+    color_opts = "<option value=auto>포스트잇 읽기 (자동)</option><option value=red>빨강 공</option><option value=blue>파랑 공</option>"
     return f"""
 <h1><span class="num g-prep">4</span>바구니 넣기 학습</h1>
 <p class=sub>실제 상차 순서대로 돌리면서 <b>5 바구니 위 · 6 바구니 안 · 7 집게 해제 · 8 성공 확인</b> 을 손으로 가르쳐요.
@@ -498,6 +561,8 @@ def place_body() -> str:
   <p class=small id=settext></p>
   <p><label><input type=checkbox id=noros> 차 통신 없이 (신호를 화면에만 표시. ROS2 가 없을 때 연습용)</label></p>
   <h2>학습</h2>
+  <p><select id=lfrom aria-label='학습 시작 단계'>{learn_opts}</select> <select id=lcolor aria-label='학습 공 색'>{color_opts}</select></p>
+  <p class=small>5 이후부터는 지금 상태(공을 쥔 채)에서 시작해요. 6~8 부터면 앞 단계 값은 가장 최근 성공 회차에서 빌려 와요.</p>
   <p><button id=learn>▶ 학습 시작</button> <button id=stop style="background:#b3261e;border-color:#b3261e">■ 정지</button>
      <button id=cargo class=sec hidden>차 출발시키기 (공 없이)</button></p>
   <div id=teach class=msg hidden>
@@ -514,9 +579,10 @@ def place_body() -> str:
   </div>
   <p><button id=ball hidden>공 놓았어요 → 4번부터</button> <button id=cont hidden>계속 ▶</button></p>
   <h2>테스트</h2>
-  <p><select id=from>{test_opts}</select> <select id=color><option value=red>빨강 공</option><option value=blue>파랑 공</option></select>
+  <p><select id=from aria-label='테스트 시작 단계'>{test_opts}</select> <select id=color aria-label='테스트 공 색'>{color_opts}</select>
      <label><input type=checkbox id=pause> 한 단계씩 멈추기</label> <button id=test>▶ 테스트</button></p>
-  <p class=small>학습한 ✔ 회차들의 평균으로 자동 실행해요. 5단계 이후부터 시작하면 팔이 공을 쥐고 있어야 해요 (공 색도 골라 주세요).</p>
+  <p class=small>학습한 ✔ 회차들의 평균으로 자동 실행해요. '포스트잇 읽기 (자동)' 이면 포스트잇 색을 읽고 그 색 공(빨강 = 빨간공_집기, 파랑 = 파란공_집기)을 집어요.
+     5 이후부터 시작하면 팔이 공을 쥐고 있어야 하고 공 색을 골라야 해요.</p>
  </div>
 </div>
 <h2>저장된 회차</h2>
@@ -556,7 +622,7 @@ function render(d){S=d;const b=d.book;const sel=$('set');const keep=sel.value;
  const set=b.sets.find(s=>s.id===sel.value);
  $('settext').textContent=set?('만든 때 '+set.created+' · ★ = 상차 미션 실행에 쓰는 세트'):'';
  const run=d.busy,w=d.waiting||'';
- ['learn','test','setdel'].forEach(i=>$(i).disabled=run||!set);$('stop').disabled=!run;
+ ['learn','test','setdel','lfrom','lcolor','from','color'].forEach(i=>$(i).disabled=run||!set);$('stop').disabled=!run;
  $('teach').hidden=!w.startsWith('teach');
  document.querySelectorAll('[data-save]').forEach(x=>x.disabled=w!=='teach'+x.dataset.save);
  $('nextbox').hidden=w!=='next';$('judge').textContent=d.judged===null?'':'YOLO 판정: '+(d.judged?'성공 (공이 든 바구니 보임)':'실패 (안 보임)');
@@ -588,9 +654,12 @@ $('setnew').onclick=()=>{const n=prompt('새 세트 이름 (비우면 자동)','
 $('setname').onclick=()=>{const n=prompt('세트 새 이름');if(n)post('set-rename',{sid:sid(),label:n})};
 $('setstar').onclick=()=>post('set-choose',{sid:sid()});
 $('setdel').onclick=()=>{if(confirm('세트와 그 안의 회차를 모두 지울까요? (백업이 남아요)'))post('set-delete',{sid:sid()})};
-$('learn').onclick=()=>{if(confirm('팔이 대기 자세로 움직이고, 차가 오면 정지 신호를 보낸 뒤 공을 집어요. 주변을 비웠나요?'))post('learn',{sid:sid(),no_ros:$('noros').checked})};
-$('test').onclick=()=>{const f=+$('from').value;if(f>=5&&!confirm('지금 팔이 '+($('color').value==='red'?'빨간':'파란')+' 공을 쥐고 있나요?'))return;
- if(confirm(f+'단계부터 자동으로 움직여요. 주변을 비웠나요?'))post('test',{sid:sid(),start:f,color:$('color').value,pause:$('pause').checked,no_ros:$('noros').checked})};
+function holding(f,c){if(f<5||f>8)return true;if(c==='auto'){say('5 이후부터는 팔이 쥔 공 색(빨강 / 파랑)을 골라 주세요.',false);return false}
+ return confirm('지금 팔이 '+(c==='red'?'빨간':'파란')+' 공을 쥐고 있나요?')}
+$('learn').onclick=()=>{const f=+$('lfrom').value,c=$('lcolor').value;if(f===9&&c==='auto'){say('9 는 공 색(빨강 / 파랑)을 골라 주세요.',false);return}if(!holding(f,c))return;
+ if(confirm(f===2?'팔이 대기 자세로 움직이고, 차가 오면 정지 신호를 보낸 뒤 공을 집어요. 주변을 비웠나요?':f+'단계부터 학습해요. 주변을 비웠나요?'))post('learn',{sid:sid(),start:f,color:c,no_ros:$('noros').checked})};
+$('test').onclick=()=>{const f=+$('from').value,c=$('color').value;if(f===9&&c==='auto'){say('9 는 공 색(빨강 / 파랑)을 골라 주세요.',false);return}if(!holding(f,c))return;
+ if(confirm(f+'단계부터 자동으로 움직여요. 주변을 비웠나요?'))post('test',{sid:sid(),start:f,color:c,pause:$('pause').checked,no_ros:$('noros').checked})};
 $('stop').onclick=()=>post('stop');
 $('cargo').onclick=()=>{if(confirm('팔(집게)이 바구니에서 완전히 빠져 있나요? 차가 공 없이 출발해요.'))post('car-go')};
 document.querySelectorAll('[data-save]').forEach(x=>x.onclick=()=>post('save',{step:+x.dataset.save}));

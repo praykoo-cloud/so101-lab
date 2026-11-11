@@ -373,6 +373,58 @@ class SessionTest(unittest.TestCase):
         self.s._thread.join(5)
         self.assertEqual(self.link.pauses, [True, False])
 
+    def test_pick_only_reads_the_postit_and_picks_that_ball(self):
+        self.s.start("test", self.sid, self.link, 4, "auto")             # 학습 회차가 없어도 된다
+        self.s._thread.join(5)
+        self.assertEqual(self.ops.picked, ["red"])                         # 포스트잇 빨강 → 빨간공_집기
+        self.assertEqual(self.s.status["color"], "red")
+        self.assertEqual(self.link.history, [])                            # 차 신호는 안 보낸다
+        self.assertTrue(self.s.status["results"][-1]["ok"])
+
+    def test_chosen_color_skips_reading_the_postit(self):
+        self.book.add_take(self.sid, steps(pan=10.0, cx=320.0), {}, success=True)
+        self.s.start("test", self.sid, self.link, 2, "blue", False)
+        self.s._thread.join(5)
+        self.assertEqual(self.ops.picked[0], "blue")                       # 포스트잇은 빨강이지만 고른 파랑으로
+
+    def test_start_rules(self):
+        with self.assertRaises(PlaceError):
+            self.s.start("learn", self.sid, self.link, 7, "red")           # 빌려 올 성공 회차가 없음
+        with self.assertRaises(PlaceError):
+            self.s.start("learn", self.sid, self.link, 5, "auto")          # 5 이후는 색을 골라야
+        with self.assertRaises(PlaceError):
+            self.s.start("learn", self.sid, self.link, 3, "red")           # 3 은 2~4 묶음 안
+        with self.assertRaises(PlaceError):
+            self.s.start("test", self.sid, self.link, 2, "auto")           # 테스트 2 는 학습 회차가 필요
+
+    def test_learn_from_step_7_borrows_5_and_6_from_the_latest_success(self):
+        self.book.add_take(self.sid, steps(pan=3.0, cx=300.0), {}, success=True)
+        self.book.add_take(self.sid, steps(pan=4.0, cx=310.0), {}, success=True)   # 가장 최근 성공
+        self.ops.a.update({"1": 12.0, "2": -20.0})                         # 지금 상태: 바구니 안에서 공을 쥔 채
+        self.s.start("learn", self.sid, self.link, 7, "red")
+        self.wait_for("teach7")
+        self.assertEqual(self.link.states(), ["IN_PROGRESS"])              # 차를 세워 둔 채 시작
+        self.s.handle("grip", {"delta": 40})
+        self.eye.loaded = True
+        self.s.handle("save", {"step": 7})
+        self.wait_for("teach8")
+        self.s.handle("save", {"step": 8})
+        self.wait_for("next")
+        self.s.handle("next", {"verdict": "auto"})
+        self.s._thread.join(5)
+        takes = list(self.book.get_set(self.sid)["takes"].values())
+        new = takes[-1]
+        self.assertEqual(new["steps"]["above"]["angles"]["1"], 4.0)         # 5 · 6 은 최근 성공 회차에서
+        self.assertEqual(new["steps"]["inside"]["angles"]["1"], 4.0)
+        self.assertEqual(new["steps"]["release"]["angles"]["1"], 12.0)      # 7 · 8 은 지금 가르친 값
+        self.assertEqual(self.ops.picked, [])                               # 공 집기는 건너뜀
+        self.assertEqual(self.link.states()[-1], "SUCCESS")
+
+    def test_learn_from_9_only_goes_home_and_sends_go(self):
+        self.s.start("learn", self.sid, self.link, 9, "blue")
+        self.s._thread.join(5)
+        self.assertEqual(self.link.states(), ["IN_PROGRESS", "SUCCESS"])
+
     def test_test_mode_from_step_5_uses_the_learned_mean(self):
         self.book.add_take(self.sid, steps(pan=10.0, cx=320.0), {}, success=True)
         with self.assertRaises(PlaceError):
