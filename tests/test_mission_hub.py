@@ -200,9 +200,20 @@ class HubTest(unittest.TestCase):
         status, out = self.post("/api/place/test", {"sid": sid, "start": 5, "color": "red", "no_ros": True})
         self.assertEqual(status, 400)
         self.assertIn("✔ 사용 회차가 없어요", out["message"])                       # 학습 전에는 테스트 못 함
-        status, out = self.post("/api/place/save", {"step": 5})
+        status, out = self.post("/api/place/save", {"step": 5})                   # 학습을 안 돌려도 언제든 저장
+        self.assertEqual(status, 200, out)
+        state = json.loads(self.get("/api/place/state")[1])
+        self.assertEqual(list(state["draft"]), ["above"])                         # 바로 화면에 보인다 (모터 값 · 사진)
+        self.assertTrue(state["draft"]["above"]["img"])
+        status, body = self.get("/img/placedraft/above.jpg")
+        self.assertEqual(body[:2], b"\xff\xd8")
+        with self.assertRaises(urllib.error.HTTPError):
+            self.get("/img/placedraft/../x.jpg")
+        status, out = self.post("/api/place/take-save", {"sid": sid})
         self.assertEqual(status, 400)
-        self.assertIn("차례가 아니", out["message"])                               # 순서대로만 저장
+        self.assertIn("아직 저장 안 한 단계", out["message"])                      # 네 단계가 다 모여야
+        self.assertIn("id=draftrows", text)                                       # 5~8 표
+        self.assertIn("<details", text)                                           # 저장된 회차는 펼치기 / 접기
         self.assertEqual(self.post("/api/place/stop", {})[0], 400)
         self.assertTrue((Path(self.tmp.name) / "place.json").exists())
 

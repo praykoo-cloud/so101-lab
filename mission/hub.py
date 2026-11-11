@@ -1203,6 +1203,10 @@ def make_router(hub: Hub):
                 if data:
                     return self.send(200, "image/jpeg", data)
                 return self.send(503, "text/plain; charset=utf-8", why.encode())
+            if path.startswith("/img/placedraft/"):                  # 4번 '지금 묶음' 사진 (아직 회차로 저장 전, 메모리에만)
+                step = path[len("/img/placedraft/"):].removesuffix(".jpg")
+                data = hub.place.draft_image(step) if hub.place is not None else None
+                return self.send(200, "image/jpeg", data) if data else self.send(404, "text/plain")
             if path.startswith("/img/place/"):                       # 4번 저장 사진 (세트 폴더 안의 .jpg 만)
                 parts = path.split("/")
                 target = None

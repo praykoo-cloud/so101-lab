@@ -310,7 +310,7 @@ class SessionTest(unittest.TestCase):
             _t.sleep(0.01)
         self.fail(f"'{what}' 차례가 오지 않음: {self.s.status}")
 
-    def teach_one(self, verdict="auto", put_ball=True):
+    def teach_one(self, verdict="auto", put_ball=True, name=""):
         for num, pan, j2 in ((5, 12.0, 0.0), (6, 12.0, -20.0), (7, 12.0, -20.0), (8, 12.0, 5.0)):
             self.wait_for(f"teach{num}")
             self.ops.a.update({"1": pan, "2": j2})                     # 사람이 손으로 옮긴 자리
@@ -320,17 +320,20 @@ class SessionTest(unittest.TestCase):
                 self.eye.loaded = put_ball
             self.assertIn("저장", self.s.handle("save", {"step": num}))
         self.wait_for("next")
-        self.s.handle("next", {"verdict": verdict})
+        self.s.handle("next", {"verdict": verdict, "label": name})
 
     def test_learn_one_take_then_success_sends_go(self):
-        with self.assertRaises(PlaceError):
-            self.s.handle("save", {"step": 5})                         # 차례가 아니면 거절
         self.s.start("learn", self.sid, self.link)
-        self.teach_one()
+        self.wait_for("teach5")
+        with self.assertRaises(PlaceError):
+            self.s.handle("save", {"step": 6})                         # 학습 중에는 차례가 아니면 거절
+        self.teach_one(name="첫 회차")
         self.s._thread.join(5)
         self.assertEqual(self.link.states(), ["WAITING", "STOP_REQUEST", "IN_PROGRESS", "SUCCESS"])
         take = next(iter(self.book.get_set(self.sid)["takes"].values()))
         self.assertTrue(take["success"])
+        self.assertEqual(take["label"], "첫 회차")                          # 화면의 회차 이름
+        self.assertEqual(self.s.status["draft"], {})                        # 회차로 저장하면 지금 묶음은 비운다
         self.assertEqual(take["steps"]["release"]["grip"], 70.0)          # 집게 % 도 저장
         self.assertAlmostEqual(take["steps"]["above"]["basket"]["cx"], WIDTH / 2 - 0 * PX_PER_DEG, delta=1)
         self.assertIsNotNone(self.book.get_set(self.sid)["watch"])        # 대기 자세 (한 번)
@@ -372,6 +375,30 @@ class SessionTest(unittest.TestCase):
         self.teach_one()
         self.s._thread.join(5)
         self.assertEqual(self.link.pauses, [True, False])
+
+    def test_hand_teaching_without_a_run_then_save_as_take(self):
+        self.ops.a.update({"1": 12.0})
+        self.assertIn("저장", self.s.handle("save", {"step": 5}))           # 학습을 안 돌려도 아무 단계나
+        self.ops.a.update({"1": 13.0})
+        self.assertIn("덮어씀", self.s.handle("save", {"step": 5}))         # 같은 단계 = 덮어쓰기
+        self.assertEqual(self.s.status["draft"]["above"]["angles"]["1"], 13.0)
+        self.assertTrue(self.s.status["draft"]["above"]["img"])
+        self.assertEqual(self.s.draft_image("above"), b"\xff\xd8fake")
+        with self.assertRaises(PlaceError):
+            self.s.handle("take-save", {"sid": self.sid})                   # 아직 6 · 7 · 8 이 없음
+        self.ops.a.update({"2": -20.0})
+        self.s.handle("save", {"step": 8})
+        self.s.handle("save", {"step": 6})                                  # 순서 상관없이
+        self.s.handle("save", {"step": 7})
+        self.assertIn("✘ 실패", self.s.handle("take-save", {"sid": self.sid, "label": "손 회차", "success": False}))
+        take = next(iter(self.book.get_set(self.sid)["takes"].values()))
+        self.assertEqual((take["label"], take["use"]), ("손 회차", False))
+        self.assertEqual(take["steps"]["above"]["angles"]["1"], 13.0)
+        self.assertTrue(self.book.image_path(self.sid, take["steps"]["above"]["image"]))
+        self.assertEqual(self.s.status["draft"], {})
+        self.s.handle("save", {"step": 5})
+        self.assertIn("비웠", self.s.handle("draft-clear", {}))
+        self.assertEqual(self.s.status["draft"], {})
 
     def test_pick_only_reads_the_postit_and_picks_that_ball(self):
         self.s.start("test", self.sid, self.link, 4, "auto")             # 학습 회차가 없어도 된다

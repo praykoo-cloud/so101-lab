@@ -61,7 +61,7 @@ class PlaceSession:
     def reset_status(self):
         self.status = {"mode": None, "set": None, "step": 0, "message": "시작 전이에요.", "error": False,
                        "waiting": None, "attempt": 0, "color": None, "results": [], "judged": None,
-                       "draft": {}, "arm_torque": None, "link": None}
+                       "draft": {}, "draft_v": 0, "arm_torque": None, "link": None}
         self.draft: dict = {}
         self.images: dict = {}
 
@@ -285,7 +285,13 @@ class PlaceSession:
         self._finish(runner, False)
 
     def _draft_status(self):
-        self.status["draft"] = {k: {"angles": v["angles"], "grip": v["grip"], "basket": v["basket"]} for k, v in self.draft.items()}
+        """화면에 보여 줄 '지금 묶음' (5~8 중 저장한 것: 모터 값 · 집게 % · 바구니 · 시각 · 사진 유무)"""
+        self.status["draft"] = {k: {"angles": v["angles"], "grip": v["grip"], "basket": v["basket"], "t": v.get("t"),
+                                    "img": self.images.get(k) is not None} for k, v in self.draft.items()}
+        self.status["draft_v"] = self.status.get("draft_v", 0) + 1          # 사진 주소를 바꿔 새 사진을 보이게
+
+    def draft_image(self, step: str) -> bytes | None:
+        return self.images.get(step) if step in STEPS else None
 
     def _teach(self, runner: PlaceRunner, sid: str, color: str, first: int = 5) -> bool:
         """first 단계부터 손으로 가르친다. first 가 6~8 이면 앞 단계는 가장 최근 성공 회차에서 빌린다"""
@@ -321,8 +327,10 @@ class PlaceSession:
         reply = self._wait_user("next", f"YOLO 판정: {'성공' if judged else '실패'}. 맞으면 [다음 단계 진행], 틀리면 판정을 바꾼 뒤 진행하세요.")
         verdict = reply.get("verdict")
         success = judged if verdict not in ("ok", "fail") else verdict == "ok"
-        tid = self.book.add_take(sid, self.draft, self.images, success, color)
+        tid = self.book.add_take(sid, self.draft, self.images, success, color, reply.get("label") or "")
         label = self.book.take(sid, tid)["label"]
+        self.draft, self.images = {}, {}
+        self._draft_status()
         self._result(8, success, f"{label} 저장 ({'성공 → ✔ 사용' if success else '실패 → ✘ 제외 (기록만)'})")
         return success
 
@@ -450,8 +458,19 @@ class PlaceSession:
             return "팔(1~5번)에 힘을 줬어요. 손을 떼도 돼요." if on else "팔(1~5번) 힘을 뺐어요. 손으로 받치세요! (집게는 그대로)"
         if action == "grip":
             return self._grip(data)
+        if action == "draft-clear":
+            self._need_idle()
+            self.draft, self.images = {}, {}
+            self._draft_status()
+            return "지금 묶음(5~8)을 비웠어요."
+        if action == "take-save":
+            return self._take_save(data)
         if action == "next":
-            self._answer("next", {"verdict": data.get("verdict")})
+            label = str(data.get("label") or "").strip()
+            if label:
+                from .place_learn import clean_label
+                clean_label(label, "회차 이름")                     # 잘못된 이름이면 진행 전에 알려 준다
+            self._answer("next", {"verdict": data.get("verdict"), "label": label})
             return "다음 단계로 진행해요."
         if action == "ball":
             self._answer("ball")
@@ -475,8 +494,9 @@ class PlaceSession:
             raise PlaceError("저장할 단계를 다시 고르세요.") from None
         if num not in TEACH_STEPS:
             raise PlaceError("저장할 단계를 다시 고르세요.")
-        if self.status["waiting"] != f"teach{num}":
-            raise PlaceError(f"지금은 {num}단계를 저장할 차례가 아니에요. 5 → 6 → 7 → 8 순서로 저장하세요.")
+        learning = self.busy()
+        if learning and self.status["waiting"] != f"teach{num}":
+            raise PlaceError(f"학습 중에는 차례가 온 단계만 저장해요. 지금은 {num}단계 차례가 아니에요.")
         step = TEACH_STEPS[num]
         with self.lock:
             seen = self.eye.look()
@@ -486,11 +506,28 @@ class PlaceSession:
             if step == "above" and basket is None:
                 raise PlaceError("YOLO 가 바구니(상자)를 못 찾아서 저장하지 않았어요. 바구니가 화면에 보이게 옮긴 뒤 다시 누르세요.")
             snap = make_snap(self.ops.angles(), self.ops.grip_pct(), basket, None)
+        again = step in self.draft
         self.draft[step] = snap
         self.images[step] = self.eye.jpeg()
         self._draft_status()
-        self._answer(f"teach{num}")
-        return f"{STEP_LABELS[step]} 저장 (사진 + 모터 값)."
+        if learning:
+            self._answer(f"teach{num}")
+            return f"{STEP_LABELS[step]} 저장 (사진 + 모터 값)."
+        left = [STEP_LABELS[s] for s in STEPS if s not in self.draft]
+        tail = " 아직: " + ", ".join(left) if left else " 네 단계가 다 모였어요. [새 회차로 저장] 을 누르세요."
+        return f"{STEP_LABELS[step]} {'다시 저장 (덮어씀)' if again else '저장'} (사진 + 모터 값).{tail}"
+
+    def _take_save(self, data: dict) -> str:
+        """학습을 돌리지 않고 손으로 모은 5~8 묶음을 회차로 저장"""
+        self._need_idle()
+        sid = str(data.get("sid"))
+        self.book.get_set(sid)
+        success = data.get("success") is not False
+        tid = self.book.add_take(sid, self.draft, self.images, success, None, data.get("label") or "")
+        label = self.book.take(sid, tid)["label"]
+        self.draft, self.images = {}, {}
+        self._draft_status()
+        return f"{label} 저장 ({'✔ 성공 → 실행에 사용' if success else '✘ 실패 → 기록만'})."
 
     def _grip(self, data: dict) -> str:
         if self.moving():
@@ -565,17 +602,11 @@ def place_body() -> str:
   <p class=small>5 이후부터는 지금 상태(공을 쥔 채)에서 시작해요. 6~8 부터면 앞 단계 값은 가장 최근 성공 회차에서 빌려 와요.</p>
   <p><button id=learn>▶ 학습 시작</button> <button id=stop style="background:#b3261e;border-color:#b3261e">■ 정지</button>
      <button id=cargo class=sec hidden>차 출발시키기 (공 없이)</button></p>
-  <div id=teach class=msg hidden>
-   <p><button data-save=5>5 저장</button> <button data-save=6>6 저장</button> <button data-save=7>7 저장</button> <button data-save=8>8 저장</button></p>
-   <p><button class=sec id=armoff>팔 힘 빼기</button> <button class=sec id=armon>팔 고정 (힘 주기)</button>
-      <span class=small id=torquetext></span></p>
-   <p>집게 <button class=sec data-grip=-5>조금 닫기 -5%</button> <button class=sec data-grip=5>조금 열기 +5%</button>
-      <input type=range id=grip min=0 max=100 step=1 style="width:160px;vertical-align:middle" aria-label='집게 열림 %'> <b id=griptext>-</b></p>
-  </div>
   <div id=nextbox class=msg hidden>
    <p id=judge></p>
    <p>판정: <select id=verdict><option value=auto>YOLO 판정대로</option><option value=ok>성공으로</option><option value=fail>실패로</option></select>
       <button id=next>다음 단계 진행 ▶</button></p>
+   <p class=small>회차 이름은 아래 ① 가르치기의 '회차 이름' 칸에 적은 것을 써요 (비우면 1회차, 2회차 …).</p>
   </div>
   <p><button id=ball hidden>공 놓았어요 → 4번부터</button> <button id=cont hidden>계속 ▶</button></p>
   <h2>테스트</h2>
@@ -585,7 +616,24 @@ def place_body() -> str:
      5 이후부터 시작하면 팔이 공을 쥐고 있어야 하고 공 색을 골라야 해요.</p>
  </div>
 </div>
-<h2>저장된 회차</h2>
+<h2>① 가르치기 (5 바구니 위 · 6 바구니 안 · 7 집게 해제 · 8 성공 확인)</h2>
+<div class=pl-box>
+ <p class=small id=teachhint></p>
+ <p><button class=sec id=armoff>힘 빼기 (손으로 받치고!)</button> <button class=sec id=armon>힘 주기</button>
+    <span class=small id=torquetext></span></p>
+ <p>집게 <button class=sec data-grip=-5>조금 닫기 -5%</button> <button class=sec data-grip=5>조금 열기 +5%</button>
+    <input type=range id=grip min=0 max=100 step=1 style="width:160px;vertical-align:middle" aria-label='집게 열림 %'> <b id=griptext>-</b></p>
+ <p><button data-save=5>+ 5 바구니 위 저장</button> <button data-save=6>+ 6 바구니 안 저장</button>
+    <button data-save=7>+ 7 집게 해제 저장</button> <button data-save=8>+ 8 성공 확인 저장</button>
+    <button class=sec id=draftclear>모두 비우기</button></p>
+ <div class=pl-scroll><table class=pl-table>
+  <thead><tr><th>순서</th><th>YOLO 사진</th><th>받침</th><th>어깨</th><th>팔꿈치</th><th>손목 꺾기</th><th>손목 돌리기</th><th>그리퍼 %</th><th>바구니 위치</th><th>저장 시각</th></tr></thead>
+  <tbody id=draftrows></tbody></table></div>
+ <p>회차 이름 (비우면 1회차, 2회차 …) <input id=tname maxlength=30 aria-label='회차 이름' style="width:180px">
+    <select id=tresult aria-label='회차 결과'><option value=ok>✔ 성공 (실행에 사용)</option><option value=fail>✘ 실패 (기록만)</option></select>
+    <button id=takesave>새 회차로 저장</button></p>
+</div>
+<h2>② 저장된 회차 <span class=small>(눌러서 펼치기 / 접기)</span></h2>
 <div id=watch></div>
 <div id=takes></div>
 """
@@ -602,6 +650,17 @@ PLACE_CSS = """
 .pl-take.off{opacity:.6}.pl-shots{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
 .pl-shots figure{margin:0}.pl-shots img{width:100%;border-radius:6px;border:1px solid var(--line)}
 .pl-shots figcaption{font-size:12px;color:var(--mute)}
+.pl-box{background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:10px 0}
+.pl-scroll{overflow-x:auto}
+.pl-table{width:100%;border-collapse:collapse;font-size:14px;background:#fff}
+.pl-table th,.pl-table td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:middle;white-space:nowrap}
+.pl-table th{background:#f3f6fa}
+.pl-table img{width:150px;border-radius:6px;border:1px solid var(--line);display:block}
+.pl-table tr.empty td{color:var(--mute)}
+details.pl-take>summary{cursor:pointer;list-style:none;font-size:15px}
+details.pl-take>summary::-webkit-details-marker{display:none}
+details.pl-take>summary::before{content:'▶ ';color:var(--brand)}
+details.pl-take[open]>summary::before{content:'▼ '}
 """
 
 
@@ -609,6 +668,14 @@ def place_script(token: str) -> str:
     return """<script>
 const T='__TOKEN__';const $=id=>document.getElementById(id);let S=null,camBusy=false;
 const NAMES={above:'5 바구니 위',inside:'6 바구니 안',release:'7 집게 해제',check:'8 성공 확인'};
+const OPEN=new Set();let KNOWN=null,lastTakes='',lastDraft='',lastWatch='';
+document.addEventListener('toggle',e=>{const t=e.target;if(t.dataset&&t.dataset.tid){if(t.open)OPEN.add(t.dataset.tid);else OPEN.delete(t.dataset.tid)}},true);
+function num(v){return v==null?'-':v}
+function rows(steps,img,extra){return Object.keys(NAMES).map(k=>{const s=steps[k];
+ if(!s)return '<tr class=empty><td><b>'+NAMES[k]+'</b></td><td colspan=9>아직 없음</td></tr>';
+ const a=s.angles||{},src=img(k,s);
+ return '<tr><td><b>'+NAMES[k]+'</b>'+(extra?extra(k):'')+'</td><td>'+(src?'<a target=_blank href="'+src+'"><img loading=lazy src="'+src+'" alt="'+NAMES[k]+' YOLO 사진"></a>':'<span class=small>(사진 없음)</span>')+'</td>'+
+  ['1','2','3','4','5'].map(j=>'<td>'+num(a[j])+'</td>').join('')+'<td>'+num(s.grip)+'</td><td>'+(s.basket?'x '+s.basket.cx+' · y '+s.basket.cy:'-')+'</td><td>'+(s.t||'-')+'</td></tr>'}).join('')}
 function say(t,ok){const o=$('out');o.textContent=t;o.className='msg '+(ok===false?'bad':ok?'ok':'')}
 async function post(a,d){const r=await fetch('/api/place/'+a,{method:'POST',headers:{'Content-Type':'application/json','X-Hub-Token':T},body:JSON.stringify(d||{})});
  const j=await r.json().catch(()=>({message:'응답을 읽지 못했어요.'}));say(j.message,r.ok);refresh();return r.ok}
@@ -623,8 +690,15 @@ function render(d){S=d;const b=d.book;const sel=$('set');const keep=sel.value;
  $('settext').textContent=set?('만든 때 '+set.created+' · ★ = 상차 미션 실행에 쓰는 세트'):'';
  const run=d.busy,w=d.waiting||'';
  ['learn','test','setdel','lfrom','lcolor','from','color'].forEach(i=>$(i).disabled=run||!set);$('stop').disabled=!run;
- $('teach').hidden=!w.startsWith('teach');
- document.querySelectorAll('[data-save]').forEach(x=>x.disabled=w!=='teach'+x.dataset.save);
+ const moving=run&&!w;
+ document.querySelectorAll('[data-save]').forEach(x=>x.disabled=run?w!=='teach'+x.dataset.save:!set);
+ ['armoff','armon','grip'].forEach(i=>$(i).disabled=moving);document.querySelectorAll('[data-grip]').forEach(x=>x.disabled=moving);
+ const dr=d.draft||{},have=Object.keys(NAMES).filter(k=>dr[k]).length;
+ $('draftclear').disabled=run||!have;$('takesave').disabled=run||!set||have<4;$('tresult').disabled=run;
+ $('teachhint').textContent=run?(w.startsWith('teach')?'학습 중: 지금은 '+w.slice(5)+'단계 차례예요. 팔을 옮긴 뒤 [+ '+w.slice(5)+' … 저장] 을 누르세요. 저장하면 다음 단계로 넘어가요.':'학습 · 테스트가 도는 중이에요. 가르칠 차례가 오면 저장 버튼이 켜져요.')
+  :'학습을 돌리지 않아도 돼요: [힘 빼기] → 팔을 손으로 옮기기 → 단계 저장. 같은 단계를 다시 누르면 덮어써요. 네 단계가 모이면 [새 회차로 저장] ('+have+'/4).';
+ const dh=rows(dr,(k,s)=>s.img?'/img/placedraft/'+k+'.jpg?v='+d.draft_v:null);
+ if(dh!==lastDraft){$('draftrows').innerHTML=dh;lastDraft=dh}
  $('nextbox').hidden=w!=='next';$('judge').textContent=d.judged===null?'':'YOLO 판정: '+(d.judged?'성공 (공이 든 바구니 보임)':'실패 (안 보임)');
  $('cargo').hidden=run||!(d.link&&(d.link.arm==='STOP_REQUEST'||d.link.arm==='IN_PROGRESS'));
  $('ball').hidden=w!=='ball';$('cont').hidden=w!=='continue';
@@ -635,17 +709,23 @@ function render(d){S=d;const b=d.book;const sel=$('set');const keep=sel.value;
  const res={};(d.results||[]).forEach(r=>res[r.step]=r.ok);
  document.querySelectorAll('#steps li').forEach(li=>{const n=+li.dataset.step;li.className=(d.busy&&n===d.step?'now ':'')+(n in res?(res[n]?'ok':'bad'):'')});
  const L=d.link;$('linktext').textContent=L?('차 통신'+(L.fake?'(화면에만)':'')+': 팔 → '+L.arm+' · 차 상태 '+(L.car||'아직 못 받음')+(d.attempt?' · 시도 '+d.attempt+'번째':'')+(d.color?' · 색 '+(d.color==='red'?'빨강':'파랑'):'')):'';
- if(!set){$('watch').innerHTML='';$('takes').innerHTML='<p class=small>세트를 만들고 학습을 시작하세요.</p>';return}
- const wt=set.watch;$('watch').innerHTML='<div class=pl-take><b>대기 자세 (세트마다 한 번)</b> '+(wt?'<span class=small>'+wt.t+' · 모터 '+ang(wt.angles)+' · 집게 '+wt.grip+'%</span>':'<span class=warn>아직 없음 (학습을 시작하면 자동 저장)</span>')+
+ if(!set){$('watch').innerHTML='';$('takes').innerHTML='<p class=small>세트를 만들고 학습을 시작하세요.</p>';lastTakes=lastWatch='';return}
+ const ids=set.takes.map(t=>t.id);if(KNOWN&&KNOWN.set===set.id)ids.filter(i=>!KNOWN.ids.includes(i)).forEach(i=>OPEN.add(i));KNOWN={set:set.id,ids};  // 새로 저장된 회차는 펼쳐서 보여 준다
+ const wt=set.watch;const wh='<div class=pl-take><b>대기 자세 (세트마다 한 번)</b> '+(wt?'<span class=small>'+wt.t+' · 모터 '+ang(wt.angles)+' · 집게 '+wt.grip+'%</span>':'<span class=warn>아직 없음 (학습을 시작하면 자동 저장)</span>')+
   '<div class=pl-shots style=max-width:200px>'+(wt?shot(0,set.id,wt.image,'대기 자세 YOLO 사진'):'')+'</div><p><button class=sec data-goto=watch '+(wt?'':'disabled')+'>이 자세로 이동</button> <button class=sec id=watchredo>지금 자세로 다시 저장</button></p></div>';
- $('takes').innerHTML=set.takes.slice().reverse().map(t=>'<div class="pl-take'+(t.use?'':' off')+'"><b>'+esc(t.label)+'</b> <span class=small>'+t.created+' · '+(t.success?'<span class=ok>성공</span>':'<span class=bad>실패</span>')+' · 색 '+(t.color==='red'?'빨강':t.color==='blue'?'파랑':'-')+' · '+(t.use?'✔ 사용':'✘ 제외')+'</span>'+
-  '<div class=pl-shots>'+Object.keys(NAMES).map(k=>{const s=t.steps[k];return shot(0,set.id,s.image,NAMES[k]+'<br>모터 '+ang(s.angles)+' · 집게 '+s.grip+'%'+(s.basket?'<br>바구니 x'+s.basket.cx+' y'+s.basket.cy:'')+'<br><button class=sec data-goto='+k+' data-tid='+t.id+'>이 자세로</button>')}).join('')+'</div>'+
-  '<p><button class=sec data-use='+(t.use?'0':'1')+' data-tid='+t.id+'>'+(t.use?'✘ 제외하기':'✔ 사용하기')+'</button> <button class=sec data-rename='+t.id+'>이름 바꾸기</button> <button class=sec data-del='+t.id+'>지우기</button></p></div>').join('')||'<p class=small>아직 회차가 없어요.</p>';
+ const th=set.takes.slice().reverse().map(t=>'<details class="pl-take'+(t.use?'':' off')+'" data-tid='+t.id+(OPEN.has(t.id)?' open':'')+'><summary><b>'+esc(t.label)+'</b> <span class=small>'+t.created+' · '+(t.success?'<span class=ok>성공</span>':'<span class=bad>실패</span>')+' · 색 '+(t.color==='red'?'빨강':t.color==='blue'?'파랑':'-')+' · '+(t.use?'✔ 사용':'✘ 제외')+'</span></summary>'+
+  '<div class=pl-scroll><table class=pl-table><thead><tr><th>순서</th><th>YOLO 사진</th><th>받침</th><th>어깨</th><th>팔꿈치</th><th>손목 꺾기</th><th>손목 돌리기</th><th>그리퍼 %</th><th>바구니 위치</th><th>저장 시각</th></tr></thead><tbody>'+
+  rows(t.steps,(k,s)=>s.image?'/img/place/'+set.id+'/'+s.image:null,k=>'<br><button class=sec data-goto='+k+' data-tid='+t.id+'>이 자세로</button>')+'</tbody></table></div>'+
+  '<p><button class=sec data-use='+(t.use?'0':'1')+' data-tid='+t.id+'>'+(t.use?'✘ 제외하기':'✔ 사용하기')+'</button> <button class=sec data-rename='+t.id+'>이름 바꾸기</button> <button class=sec data-del='+t.id+'>지우기</button></p></details>').join('')||'<p class=small>아직 회차가 없어요.</p>';
+ const key=th+'|'+run;if(key!==lastTakes||wh!==lastWatch){$('watch').innerHTML=wh;$('takes').innerHTML=th;lastTakes=key;lastWatch=wh;bindTakes(run)}}
+function bindTakes(run){
  document.querySelectorAll('[data-goto]').forEach(x=>{x.disabled=x.disabled||run;x.onclick=()=>{if(confirm('팔이 저장된 자세로 움직여요. 주변을 비웠나요?'))post('goto',{sid:sid(),tid:x.dataset.tid,step:x.dataset.goto})}});
  document.querySelectorAll('[data-use]').forEach(x=>x.onclick=()=>post('take-use',{sid:sid(),tid:x.dataset.tid,use:x.dataset.use==='1'}));
  document.querySelectorAll('[data-rename]').forEach(x=>x.onclick=()=>{const n=prompt('새 회차 이름 (1~30자)');if(n)post('take-rename',{sid:sid(),tid:x.dataset.rename,label:n})});
  document.querySelectorAll('[data-del]').forEach(x=>x.onclick=()=>{if(confirm('이 회차를 지울까요? (백업이 남아요)'))post('take-delete',{sid:sid(),tid:x.dataset.del})});
  const wr=$('watchredo');if(wr){wr.disabled=run;wr.onclick=()=>{if(confirm('지금 팔 자세와 카메라 사진을 이 세트의 대기 자세로 다시 저장할까요?'))post('watch-redo',{sid:sid()})}}}
+$('draftclear').onclick=()=>{if(confirm('지금 묶음(5~8 저장한 것)을 모두 비울까요?'))post('draft-clear')};
+$('takesave').onclick=()=>post('take-save',{sid:sid(),label:$('tname').value,success:$('tresult').value==='ok'}).then(ok=>{if(ok)$('tname').value=''});
 async function refresh(){try{render(await (await fetch('/api/place/state',{cache:'no-store'})).json())}catch(e){say('허브와 연결이 끊겼어요. 허브가 켜져 있는지 확인하세요.',false)}}
 function cam(){if(camBusy)return;camBusy=true;const i=new Image();i.onload=()=>{$('cam').src=i.src;camBusy=false;$('camtext').textContent='YOLO 인식 화면'};
  i.onerror=()=>{camBusy=false;$('camtext').textContent='카메라 화면을 받지 못했어요 (USB · 카메라 번호 확인)'};i.src='/img/live.jpg?t='+Date.now()}
@@ -656,7 +736,7 @@ $('setstar').onclick=()=>post('set-choose',{sid:sid()});
 $('setdel').onclick=()=>{if(confirm('세트와 그 안의 회차를 모두 지울까요? (백업이 남아요)'))post('set-delete',{sid:sid()})};
 function holding(f,c){if(f<5||f>8)return true;if(c==='auto'){say('5 이후부터는 팔이 쥔 공 색(빨강 / 파랑)을 골라 주세요.',false);return false}
  return confirm('지금 팔이 '+(c==='red'?'빨간':'파란')+' 공을 쥐고 있나요?')}
-$('learn').onclick=()=>{const f=+$('lfrom').value,c=$('lcolor').value;if(f===9&&c==='auto'){say('9 는 공 색(빨강 / 파랑)을 골라 주세요.',false);return}if(!holding(f,c))return;
+$('learn').onclick=()=>{const f=+$('lfrom').value,c=$('lcolor').value;if(S&&S.draft&&Object.keys(S.draft).length&&!confirm('① 가르치기에 회차로 저장하지 않은 값이 있어요. 학습을 시작하면 비워져요. 계속할까요?'))return;if(f===9&&c==='auto'){say('9 는 공 색(빨강 / 파랑)을 골라 주세요.',false);return}if(!holding(f,c))return;
  if(confirm(f===2?'팔이 대기 자세로 움직이고, 차가 오면 정지 신호를 보낸 뒤 공을 집어요. 주변을 비웠나요?':f+'단계부터 학습해요. 주변을 비웠나요?'))post('learn',{sid:sid(),start:f,color:c,no_ros:$('noros').checked})};
 $('test').onclick=()=>{const f=+$('from').value,c=$('color').value;if(f===9&&c==='auto'){say('9 는 공 색(빨강 / 파랑)을 골라 주세요.',false);return}if(!holding(f,c))return;
  if(confirm(f+'단계부터 자동으로 움직여요. 주변을 비웠나요?'))post('test',{sid:sid(),start:f,color:c,pause:$('pause').checked,no_ros:$('noros').checked})};
@@ -667,7 +747,7 @@ $('armoff').onclick=()=>{if(confirm('팔(1~5번) 힘을 뺄까요? 손으로 받
 $('armon').onclick=()=>post('arm-torque',{on:true});
 document.querySelectorAll('[data-grip]').forEach(x=>x.onclick=()=>post('grip',{delta:+x.dataset.grip}));
 $('grip').onchange=()=>post('grip',{pct:+$('grip').value});
-$('next').onclick=()=>post('next',{verdict:$('verdict').value});
+$('next').onclick=()=>post('next',{verdict:$('verdict').value,label:$('tname').value}).then(ok=>{if(ok)$('tname').value=''});
 $('ball').onclick=()=>post('ball');$('cont').onclick=()=>post('continue');
 refresh();setInterval(refresh,1000);cam();setInterval(cam,500);
 </script>""".replace("__TOKEN__", token)
