@@ -629,6 +629,8 @@ class PlaceRunner:
         xyz = start.copy()
         t0 = self.clock()
         missed, centered_once, stuck_xy, stuck_down, stuck_tilt = 0, False, False, False, False
+        last = None                                      # 마지막으로 바구니를 본 때 (가로, 세로, 넓이, 손끝, 각도, 기울기)
+        backups = 0
         final_lean = math.sin(math.radians(cfg.seek_final_tilt_deg))
         lean_step = math.sin(math.radians(cfg.seek_tilt_step_deg))
 
@@ -644,14 +646,39 @@ class PlaceRunner:
             f = self._feat()
             if f is None:
                 missed += 1
-                if missed >= 10:
-                    why = "다가가는 동안 바구니가 카메라에 안 보여요"
+                if missed >= cfg.seek_lost_frames:
+                    if last is not None and last[2] >= cfg.seek_lost_ok_area:
+                        # 너무 가까워져 YOLO 가 바구니를 놓침 (공에 가리거나 네모가 화면을 넘음) → 이미 바구니 바로 위
+                        if not centered_once:
+                            report(5, True, f"바구니를 거의 가운데로 맞췄어요 (가로 {last[0]:+.0f}, 세로 {last[1]:+.0f} 픽셀)")
+                        report(6, True, f"바구니가 너무 가까워 YOLO 가 놓쳤지만 바로 전에 화면의 {last[2] * 100:.0f}% 였어요 → 여기서 집게를 열어요")
+                        return True, "", q
+                    if last is not None and backups < 2:
+                        # 바구니를 마지막으로 본 자리로 돌아가 조금 위로 → 다시 찾기
+                        backups += 1
+                        missed = 0
+                        reach.lean = last[5]
+                        back = last[3].copy()
+                        back[2] += cfg.seek_down_mm / 1000.0
+                        try:
+                            q = reach.go(back, last[4])
+                            xyz = back
+                        except ReachError:
+                            try:
+                                q = reach.go(last[3], last[4])
+                                xyz = last[3].copy()
+                            except ReachError:
+                                pass
+                        continue
+                    why = ("바구니가 카메라에 안 보여요 (쥔 공에 가렸거나 화면 밖으로 나감). "
+                           "대기 자세에서 바구니가 화면에 잘 보이는지 확인하세요")
                     report(5 if not centered_once else 6, False, why)
                     return False, why, q
                 self.sleep(self.cfg.track_period)
                 continue
             missed = 0
             ex, ey, area = f
+            last = (ex, ey, area, xyz.copy(), q, reach.lean)
             centered = abs(ex) <= cfg.seek_center_px and abs(ey) <= cfg.seek_center_px
             if centered and not centered_once:
                 centered_once = True

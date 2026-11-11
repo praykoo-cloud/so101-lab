@@ -158,6 +158,8 @@ class MissionConfig:
     seek_lift_mm: float = 50.0                  # 집게를 연 뒤 이만큼(mm) 위로 올라가서 성공을 확인한다
     seek_drop_seconds: float = 0.4              # 집게를 연 뒤 공이 떨어질 때까지 기다리는 시간(초)
     seek_speed: int = 800                       # 찾아가 넣기에서 팔 속도 (서보 틱/초. 120 ≈ 10°/s, 800 ≈ 70°/s). 너무 빠르면 줄이세요
+    seek_lost_frames: int = 6                   # 바구니가 연속 이만큼 안 보이면 '놓침'
+    seek_lost_ok_area: float = 0.35             # 놓치기 직전 바구니가 화면의 이만큼 이상이었으면 이미 바로 위 → 거기서 집게를 연다
     seek_final_tilt_deg: float = 5.0            # 다가가면서 집게를 이 각도(수직에서)까지 세운다 (공이 바구니에 곧게 떨어지게). 팔이 못 세우면 세울 수 있는 만큼만
     seek_tilt_step_deg: float = 6.0             # 아래로 한 칸 갈 때마다 집게를 이만큼씩 세운다
     # YOLO 넣기 (5 바구니 위를 YOLO 로 맞추고, 6 은 수직으로 내려가고, 8 은 수직으로 올라온다)

@@ -761,6 +761,27 @@ class SeekTest(unittest.TestCase):
         self.assertLess(math.hypot(self.drop_xy[0] - bx, self.drop_xy[1] - by), 0.03)   # 공이 바구니 가운데 3 cm 안에 떨어짐
         self.assertIn("50 mm", seen[3][2])                                          # 놓은 뒤 위로
 
+    def test_yolo_losing_the_close_basket_still_releases_there(self):
+        view = self.eye.look
+
+        def look():                                                                 # 가까워지면 (화면 60% 넘게) YOLO 가 바구니를 놓친다
+            seen = view()
+            if seen.dets and seen.dets[0].w * seen.dets[0].h / (640 * 480) > 0.6:
+                return Seen([], 640, 480)
+            return seen
+        self.eye.look = look
+        ok, why, seen = self.run_seek()
+        steps = {n: (k, w) for n, k, w in seen}
+        self.assertTrue(steps[6][0], seen)
+        self.assertIn("놓쳤지만", steps[6][1])
+        self.assertTrue(steps[7][0])                                                 # 집게를 열었다
+
+    def test_success_label_before_step_9_is_only_the_basket(self):
+        self.eye.loaded = True                                                      # 처음부터 'success_blue' 로 보임 (쥔 공이 바구니 앞)
+        ok, why, seen = self.run_seek()
+        self.assertEqual([n for n, k, w in seen if k], [5, 6, 7, 8, 9])             # 5~8 은 그냥 바구니로 따라가고
+        self.assertEqual(seen[-1][0], 9)                                             # 성공 판단은 9 에서만
+
     def test_basket_not_visible_fails_without_moving_far(self):
         self.eye.basket = (0.30, 0.6, -0.12)                                        # 화면 밖
         ok, why, seen = self.run_seek()
