@@ -21,7 +21,7 @@ from __future__ import annotations
 import threading
 import time
 
-from .arm_io import ArmIO
+from .arm_io import ArmIO, apply_accel, play_options
 from .config import MissionConfig
 from .motions import MAX_POINTS, MotionBook, MotionError, capture_point, play
 
@@ -126,8 +126,9 @@ class MotionDesk:
             self.status.update(step=i + 1, total=n, message=f"{i + 1} / {n} 번 지점으로 가는 중…")
         try:
             with self._arm_lock:
-                report = play(self.robot, points, speed=self.cfg.speed_slow, stop=self._stop, on_step=on_step,
-                              too_hot=self.arm.too_hot)
+                apply_accel(self.robot, self.cfg)                # 실제 상차와 같은 속도 · 멈칫 설정으로 재생
+                report = play(self.robot, points, stop=self._stop, on_step=on_step,
+                              too_hot=self.arm.too_hot, **play_options(self.cfg))
             if tid is not None:
                 self.book.add_run(name, tid, report)
             if report["stopped"]:

@@ -95,7 +95,7 @@ class StudioRobot:
     def gripper_percent(self):
         return round(float(self._arm.get_gripper()), 1)
 
-    def wait_until_settled(self, tolerance_deg: float = 0.5, timeout: float = 5.0) -> bool:
+    def wait_until_settled(self, tolerance_deg: float = 0.5, timeout: float = 5.0, still_seconds: float = 0.5) -> bool:
         return self._arm.wait(timeout)
 
     # ── 움직이기 ────────────────────────────────────────────────────────
