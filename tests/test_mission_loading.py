@@ -306,7 +306,8 @@ class LoadingTest(unittest.TestCase):
 
 
 class WorldOps:
-    """기본 방식 시험용 팔: 받침 각도는 FakeArm.pan 과 같다. 7(집게 해제) 때 바구니 위에 맞춰져 있으면 공이 들어간다"""
+    """기본 방식 시험용 팔: 받침 각도는 FakeArm.pan 과 같다. 6(집게 해제) 때 바구니 위에 맞춰져 있으면 공이 들어간다
+    (2026-11-16: 바구니 안으로 내려가지 않고 5 바구니 위에서 바로 놓는다)"""
 
     def __init__(self, world, arm, events):
         self.world, self.arm, self.events = world, arm, events
@@ -341,7 +342,7 @@ class WorldOps:
             self.arm.pan = deg
 
     def grip(self, pct):
-        if pct > 50 and self.a["2"] < -10:                      # 바구니 안에서 열었다
+        if pct > 50:                                            # 바구니 위에서 열었다
             miss = self.miss.pop(0) if self.miss else False
             if not miss and abs(self.arm.pan - self.world.car) <= 1.5 and self.world.stopped():
                 self.world.loaded = self.color

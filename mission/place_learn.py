@@ -3,12 +3,15 @@
 저장 위치
     data/place_learn.json                     이름 · 모터 값 · 찾은 바구니 위치 · 성공 여부
     data/place_learn/<세트번호>/watch.jpg      대기 자세 YOLO 캡처 (세트마다 한 번)
-    data/place_learn/<세트번호>/<회차번호>_<단계>.jpg   회차마다 5 · 6 · 7 · 8 단계 YOLO 캡처
+    data/place_learn/<세트번호>/<회차번호>_<단계>.jpg   회차마다 3 · 5 · 9 단계 YOLO 캡처
     mission/runtime/backup/                   지우기 전에 원본을 복사해 두는 곳
 
 구조 (책장 비유)
     세트(책) = 대기 자세 1개 + 여러 회차.   ★ 하나가 실행용 세트
-    회차(쪽) = 5 바구니 위 → 6 바구니 안 → 7 집게 해제 → 8 성공 확인.   ✔ 사용 / ✘ 제외
+    회차(쪽) = 3 정차 사진 (완전 정차 순간의 YOLO 사진 + 상자 중심 x·y · 가로·세로) → 5 바구니 위 모터 값 → 9 성공 확인 모터 값.
+              ✔ 사용 / ✘ 제외.  3 은 '정차 사진 → 5 모터 값' 학습용 데이터 (없어도 회차는 저장된다)
+    (2026-11-16 바뀜: 6 집게 해제는 늘 RELEASE_PCT(60%) 로 열고, 7 은 5 자세로 다시 간다 → 가르치지 않는다.
+     그 전 회차의 6 바구니 안 · 7 집게 해제 · 8 들어올리기 값은 파일에 그대로 남아 있다)
 
 단어장
 - 세트 · 회차 : 위 비유 참고. 폴더 이름은 s1, t1 처럼 영어 번호, 화면에 보이는 이름은 한글로 따로 둔다
@@ -30,17 +33,23 @@ PLACE_FILE = ROOT / "data" / "place_learn.json"
 PLACE_DIR = ROOT / "data" / "place_learn"
 
 # 단계 이름 (영어 = 파일 · 코드용, 한글 = 화면용)
-STEPS = ("above", "inside", "release", "lift", "check")
-STEP_NUM = {"above": 5, "inside": 6, "release": 7, "lift": 8, "check": 9}
-STEP_LABELS = {"above": "5 바구니 위", "inside": "6 바구니 안", "release": "7 집게 해제", "lift": "8 들어올리기",
-               "check": "9 성공 확인"}
+STEPS = ("stop", "above", "check")                 # 지금 가르치는 단계 (3 정차 사진 · 5 바구니 위 · 9 성공 확인)
+REQUIRED_STEPS = ("above", "check")                # 회차로 저장하려면 꼭 있어야 하는 단계
+LEGACY_STEPS = ("inside", "release", "lift")       # 2026-11-16 전 회차에만 있는 단계 (예전 넣기 방식 · 시험용)
+STEP_NUM = {"stop": 3, "above": 5, "inside": 6, "release": 7, "lift": 8, "check": 9}
+STEP_LABELS = {"stop": "3 정차 사진", "above": "5 바구니 위", "check": "9 성공 확인"}
+LEGACY_LABELS = {"inside": "6 바구니 안", "release": "7 집게 해제", "lift": "8 들어올리기"}
+RELEASE_PCT = 60.0                                 # 6 집게 해제: 늘 이 % 로 연다 (가르치지 않음)
 
 
-def take_step(take: dict, step: str) -> dict:
-    """회차의 한 단계. 들어올리기(lift)가 생기기 전 회차는 5(바구니 위) 자세 + 7 의 집게 % 로 채운다 (filled=True)"""
+def take_step(take: dict, step: str) -> dict | None:
+    """회차의 한 단계. 3 정차 사진이 없는 회차(예전 회차 · 5 부터 학습)는 None.
+    들어올리기(lift)가 생기기 전 회차는 5(바구니 위) 자세 + 7 의 집게 % 로 채운다 (filled=True)"""
     steps = take["steps"]
     if step in steps:
         return steps[step]
+    if step == "stop":
+        return None
     if step == "lift" and "above" in steps:
         filled = dict(steps["above"])
         filled["grip"] = steps.get("release", {}).get("grip", filled.get("grip"))
@@ -48,7 +57,7 @@ def take_step(take: dict, step: str) -> dict:
         filled["image"] = None
         filled["filled"] = True
         return filled
-    raise PlaceError(f"회차에 {STEP_LABELS.get(step, step)} 값이 없어요.")
+    raise PlaceError(f"회차에 {STEP_LABELS.get(step) or LEGACY_LABELS.get(step, step)} 값이 없어요.")
 JOINTS = ("1", "2", "3", "4", "5")
 ID_RE = re.compile(r"^[st][0-9]{1,6}$")
 
@@ -210,16 +219,18 @@ class PlaceBook:
 
     def add_take(self, sid: str, steps: dict, images: dict, success: bool, color: str | None = None,
                  label: str = "") -> str:
-        """5 · 6 · 7 · 8 이 다 있어야 저장한다. images = {단계: JPEG bytes}"""
+        """5 · 9 가 있어야 저장한다 (3 정차 사진은 있으면 같이). images = {단계: JPEG bytes}"""
         entry = self.get_set(sid)
-        missing = [STEP_LABELS[s] for s in STEPS if s not in steps]
+        missing = [STEP_LABELS[s] for s in REQUIRED_STEPS if s not in steps]
         if missing:
             raise PlaceError("아직 저장 안 한 단계가 있어요: " + ", ".join(missing))
         number = int(entry["next"])
         tid = f"t{number}"
         entry["next"] = number + 1
         saved_steps = {}
-        for step in STEPS:
+        for step in STEPS + LEGACY_STEPS:
+            if step not in steps:
+                continue
             snap = dict(steps[step])
             snap["image"] = self.write_image(sid, f"{tid}_{STEP_NUM[step]}_{step}.jpg", images.get(step))
             saved_steps[step] = snap
@@ -279,23 +290,34 @@ class PlaceBook:
         def mean_angles(step):
             return {j: round(sum(take_step(t, step)["angles"][j] for t in used) / len(used), 2) for j in JOINTS}
 
+        def has(t, step):
+            try:
+                return take_step(t, step) is not None
+            except PlaceError:
+                return False
+
         targets = [t["steps"]["above"].get("basket") for t in used]
         targets = [b for b in targets if b]
-        grips = [t["steps"]["release"].get("grip") for t in used if t["steps"]["release"].get("grip") is not None]
+        poses = {step: mean_angles(step) for step in REQUIRED_STEPS}
+        for step in LEGACY_STEPS:                     # 예전 회차만 있으면 예전 단계도 (예전 넣기 방식 · 시험용)
+            if all(has(t, step) for t in used):
+                poses[step] = mean_angles(step)
         return {
             "set": sid, "label": entry["label"], "count": len(used),
-            "poses": {step: mean_angles(step) for step in STEPS},
+            "poses": poses,
             "target": None if not targets else {
                 "cx": round(sum(b["cx"] for b in targets) / len(targets), 1),
                 "cy": round(sum(b["cy"] for b in targets) / len(targets), 1),
                 "w": round(sum(b["w"] for b in targets) / len(targets), 1)},
-            "release_grip": None if not grips else round(sum(grips) / len(grips), 1),
+            "release_grip": RELEASE_PCT,
             "cam": entry.get("cam"),
         }
 
     @staticmethod
-    def _step_view(take: dict, step: str) -> dict:
+    def _step_view(take: dict, step: str) -> dict | None:
         snap = take_step(take, step)
+        if snap is None:
+            return None
         return {"angles": snap["angles"], "grip": snap.get("grip"), "basket": snap.get("basket"),
                 "image": snap.get("image"), "t": snap.get("t"), "filled": bool(snap.get("filled"))}
 

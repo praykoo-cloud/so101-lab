@@ -24,6 +24,12 @@ def snap(pan, basket_cx=None, grip=30.0, j2=0.0):
 
 
 def steps(pan=10.0, cx=320.0):
+    """지금 회차 (2026-11-16): 3 정차 사진 (대기 자세에서 본 상자) · 5 바구니 위 · 9 성공 확인"""
+    return {"stop": snap(0.0, 560.0), "above": snap(pan, cx), "check": snap(pan, None, j2=5.0)}
+
+
+def legacy_steps(pan=10.0, cx=320.0):
+    """2026-11-16 전 회차: 5 · 6 바구니 안 · 7 집게 해제 · 8 들어올리기 · 9"""
     return {"above": snap(pan, cx), "inside": snap(pan, None, j2=-20.0), "release": snap(pan, None, grip=70.0, j2=-20.0),
             "lift": snap(pan, None, grip=70.0, j2=-2.0), "check": snap(pan, None, j2=5.0)}
 
@@ -39,39 +45,46 @@ class BookTest(unittest.TestCase):
         sid = self.book.create_set("기본_세트")
         self.assertEqual(self.book.chosen_set(), sid)                    # 첫 세트 = 실행용
         self.book.set_watch(sid, snap(0.0, 300.0), b"jpg-watch")
-        tid = self.book.add_take(sid, steps(), {"above": b"a", "inside": b"b", "release": b"c", "lift": b"l", "check": b"d"},
-                                 success=True, color="red")
+        tid = self.book.add_take(sid, steps(), {"stop": b"s", "above": b"a", "check": b"d"}, success=True, color="red")
         self.book.rename_take(sid, tid, "왼쪽_가까이")
         again = PlaceBook(self.book.path, self.book.image_dir, self.book.backup_dir)     # 다시 불러오기
         take = again.take(sid, tid)
         self.assertEqual(take["label"], "왼쪽_가까이")
         self.assertTrue(take["use"])
         self.assertEqual(again.image_path(sid, take["steps"]["above"]["image"]).read_bytes(), b"a")
+        self.assertEqual(again.image_path(sid, take["steps"]["stop"]["image"]).read_bytes(), b"s")    # 3 정차 사진
+        self.assertEqual(take["steps"]["stop"]["basket"]["w"], 80.0)                                  # 상자 가로 · 세로도
         self.assertEqual(again.image_path(sid, "watch.jpg").read_bytes(), b"jpg-watch")
         self.assertIsNone(again.image_path(sid, "../place.json"))                   # 폴더 밖은 못 읽음
 
-    def test_old_take_without_lift_uses_the_above_pose(self):
+    def test_old_takes_still_load_and_mix_with_new_ones(self):
         sid = self.book.create_set("a")
-        old = steps(pan=6.0)
+        old = legacy_steps(pan=6.0)
         del old["lift"]
         self.book.get_set(sid)["takes"]["t1"] = {"label": "예전", "created": "x", "use": True, "success": True,
                                                  "color": "red", "steps": old}          # 들어올리기가 생기기 전 회차
         self.book.get_set(sid)["next"] = 2
         learned = self.book.learned(sid)
-        self.assertEqual(learned["poses"]["lift"], learned["poses"]["above"])      # 5 바구니 위 자세로 대신
-        view = self.book.summary()["sets"][0]["takes"][0]["steps"]["lift"]
-        self.assertTrue(view["filled"])
-        self.assertEqual(view["grip"], 70.0)                                        # 7 의 집게 % (연 채)
-        self.book.add_take(sid, steps(pan=8.0), {}, success=True)                  # 새 회차와 섞여도 평균이 된다
-        self.assertEqual(self.book.learned(sid)["poses"]["lift"]["1"], 7.0)
+        self.assertEqual(learned["poses"]["lift"], learned["poses"]["above"])      # 예전 순서용: 5 자세로 대신
+        view = self.book.summary()["sets"][0]["takes"][0]["steps"]
+        self.assertIsNone(view["stop"])                                             # 예전 회차에는 정차 사진이 없다
+        self.assertEqual(view["above"]["angles"]["1"], 6.0)
+        self.book.add_take(sid, steps(pan=8.0), {}, success=True)                  # 새 회차와 섞여도 5 · 9 는 평균
+        learned = self.book.learned(sid)
+        self.assertEqual(learned["poses"]["above"]["1"], 7.0)
+        self.assertNotIn("inside", learned["poses"])                               # 새 회차에는 6 이 없다
 
-    def test_take_needs_all_four_steps(self):
+    def test_take_needs_5_and_9_but_not_the_stop_photo(self):
         sid = self.book.create_set("a")
         partial = steps()
         del partial["check"]
         with self.assertRaises(PlaceError):
             self.book.add_take(sid, partial, {}, success=True)
         self.assertEqual(self.book.get_set(sid)["takes"], {})
+        no_stop = steps()
+        del no_stop["stop"]
+        tid = self.book.add_take(sid, no_stop, {}, success=True)                   # 5 부터 학습한 회차
+        self.assertNotIn("stop", self.book.take(sid, tid)["steps"])
 
     def test_failed_take_is_kept_but_not_used_and_learned_is_the_mean(self):
         sid = self.book.create_set("a")
@@ -83,7 +96,7 @@ class BookTest(unittest.TestCase):
         self.assertEqual(learned["count"], 2)
         self.assertEqual(learned["poses"]["above"]["1"], 15.0)
         self.assertEqual(learned["target"]["cx"], 320.0)
-        self.assertEqual(learned["release_grip"], 70.0)
+        self.assertEqual(learned["release_grip"], 60.0)                            # 6 집게 해제는 늘 60%
         self.book.set_use(sid, bad, True)
         self.assertEqual(self.book.learned(sid)["count"], 3)
 
@@ -191,6 +204,9 @@ class RunnerTest(unittest.TestCase):
         sid = self.book.create_set("a")
         self.book.add_take(sid, steps(pan=10.0, cx=320.0), {}, success=True)
         self.learned = self.book.learned(sid)
+        old = self.book.create_set("old")
+        self.book.add_take(old, legacy_steps(pan=10.0, cx=320.0), {}, success=True)
+        self.old = self.book.learned(old)                                          # 예전 순서 (6 바구니 안 · 7 · 8)
         self.cfg = MissionConfig(grip_ball_min_pct=20.0, grip_ball_max_pct=40.0, track_period=0.1,
                                  place_servo_gain_deg_per_px=0.04)
         self.ops = FakeOps()
@@ -233,11 +249,19 @@ class RunnerTest(unittest.TestCase):
         self.assertIsNotNone(corr, why)
         self.assertAlmostEqual(self.ops.a["1"], 12.0, delta=1.0)              # 차가 2도 옆에 섰다 → 받침이 따라감
         self.assertAlmostEqual(corr["1"], 2.0, delta=1.0)
-        ok, _ = self.runner.step_inside(self.learned, corr)
+        ok, why = self.runner.release_fixed()
+        self.assertTrue(ok, why)
+        self.assertEqual(self.ops.gripper, 60.0)                                  # 6 집게 해제: 늘 60%
+        self.ops.a["1"] = 0.0
+        self.runner.back_above(self.learned, corr)
+        self.assertAlmostEqual(self.ops.a["1"], 10.0 + corr["1"])                # 7 은 5 에서 맞춘 자세로
+
+    def test_old_order_still_works_with_old_takes(self):
+        corr, why = self.runner.step_above(self.old)
+        self.assertIsNotNone(corr, why)
+        self.runner.step_inside(self.old, corr)
         self.assertAlmostEqual(self.ops.a["1"], 10.0 + corr["1"])                # 6 에도 같은 보정
         self.assertEqual(self.ops.a["2"], -20.0)
-        self.runner.step_release(self.learned, corr)
-        self.assertEqual(self.ops.gripper, 70.0)                                  # 학습한 % 만큼 열기
 
     def test_too_far_is_refused_for_safety(self):
         self.eye.basket_pan = 60.0
@@ -252,16 +276,24 @@ class RunnerTest(unittest.TestCase):
 
     def test_auto_place_reports_each_step_and_success(self):
         seen = []
-        original = self.runner.step_release
+        original = self.runner.release_fixed
 
-        def release(learned, corr):
-            out = original(learned, corr)
+        def release():
+            out = original()
             self.eye.loaded = True
             return out
-        self.runner.step_release = release
+        self.runner.release_fixed = release
         ok, why = self.runner.auto_place(self.learned, on_step=lambda n, k, w: seen.append((n, k)))
         self.assertTrue(ok, why)
-        self.assertEqual(seen, [(5, True), (6, True), (7, True), (8, True), (9, True)])
+        self.assertEqual(seen, [(5, True), (6, True), (7, True), (9, True)])     # 6 집게 60% → 7 바구니 위 → 9
+        self.assertEqual(self.ops.gripper, 60.0)
+        self.assertEqual(self.ops.a["2"], 5.0)                                    # 마지막은 9 성공 확인 자세
+
+    def test_release_needs_the_ball_in_the_gripper(self):
+        self.ops.gripper = 95.0                                                   # 공이 빠짐
+        ok, why = self.runner.release_fixed()
+        self.assertFalse(ok)
+        self.assertIn("쥐고 있지 않아요", why)
 
     def test_auto_place_fails_when_no_ball_is_seen(self):
         ok, why = self.runner.auto_place(self.learned)
@@ -327,14 +359,15 @@ class SessionTest(unittest.TestCase):
         self.fail(f"'{what}' 차례가 오지 않음: {self.s.status}")
 
     def teach_one(self, verdict="auto", put_ball=True, name=""):
-        for num, pan, j2 in ((5, 12.0, 0.0), (6, 12.0, -20.0), (7, 12.0, -20.0), (8, 12.0, -2.0), (9, 12.0, 5.0)):
-            self.wait_for(f"teach{num}")
-            self.ops.a.update({"1": pan, "2": j2})                     # 사람이 손으로 옮긴 자리
-            if num == 7:
-                self.s.handle("arm-torque", {"on": True})
-                self.s.handle("grip", {"delta": 40})
-                self.eye.loaded = put_ball
-            self.assertIn("저장", self.s.handle("save", {"step": num}))
+        self.wait_for("teach5")
+        self.ops.a.update({"1": 12.0, "2": 0.0})                       # 사람이 손으로 옮긴 바구니 위
+        self.assertIn("저장", self.s.handle("save", {"step": 5}))
+        self.wait_for("teach9")                                         # 6 집게 60% · 7 바구니 위는 프로그램이
+        self.assertEqual(self.ops.gripper, 60.0)
+        self.assertEqual(self.ops.a["1"], 12.0)
+        self.eye.loaded = put_ball
+        self.ops.a.update({"2": 5.0})                                   # 성공 확인 자세
+        self.assertIn("저장", self.s.handle("save", {"step": 9}))
         self.wait_for("next")
         self.s.handle("next", {"verdict": verdict, "label": name})
 
@@ -350,8 +383,16 @@ class SessionTest(unittest.TestCase):
         self.assertTrue(take["success"])
         self.assertEqual(take["label"], "첫 회차")                          # 화면의 회차 이름
         self.assertEqual(self.s.status["draft"], {})                        # 회차로 저장하면 지금 묶음은 비운다
-        self.assertEqual(take["steps"]["release"]["grip"], 70.0)          # 집게 % 도 저장
         self.assertAlmostEqual(take["steps"]["above"]["basket"]["cx"], WIDTH / 2 - 0 * PX_PER_DEG, delta=1)
+        stop = take["steps"]["stop"]                                      # 3 정차 사진: 대기 자세(받침 0도)에서 본 상자
+        self.assertAlmostEqual(stop["basket"]["cx"], WIDTH / 2 + 12.0 * PX_PER_DEG, delta=1)
+        self.assertEqual((stop["basket"]["w"], stop["basket"]["h"]), (80, 60))
+        self.assertEqual(stop["angles"]["1"], 0.0)
+        self.assertTrue(self.book.image_path(self.sid, stop["image"]))
+        self.assertEqual(sorted(take["steps"]), ["above", "check", "stop"])
+        results = [(r["step"], r["ok"]) for r in self.s.status["results"]]
+        self.assertIn((6, True), results)
+        self.assertIn((7, True), results)
         self.assertIsNotNone(self.book.get_set(self.sid)["watch"])        # 대기 자세 (한 번)
         self.assertTrue(self.book.image_path(self.sid, take["steps"]["check"]["image"]))
 
@@ -369,6 +410,7 @@ class SessionTest(unittest.TestCase):
         self.assertEqual(self.ops.picked, ["red", "red"])                 # 4(공 집기)부터 다시
         takes = list(self.book.get_set(self.sid)["takes"].values())
         self.assertEqual([t["use"] for t in takes], [False, True])         # 실패 회차는 기록만
+        self.assertEqual(takes[0]["steps"]["stop"]["basket"], takes[1]["steps"]["stop"]["basket"])   # 다시 시도해도 같은 정차 사진
         self.assertEqual(self.link.states()[-1], "SUCCESS")
 
     def test_stop_while_teaching_keeps_the_car_until_person_releases(self):
@@ -401,17 +443,21 @@ class SessionTest(unittest.TestCase):
         self.assertTrue(self.s.status["draft"]["above"]["img"])
         self.assertEqual(self.s.draft_image("above"), b"\xff\xd8fake")
         with self.assertRaises(PlaceError):
-            self.s.handle("take-save", {"sid": self.sid})                   # 아직 6 · 7 · 8 · 9 가 없음
+            self.s.handle("take-save", {"sid": self.sid})                   # 아직 9 가 없음
+        for num in (6, 7, 8):
+            with self.assertRaises(PlaceError):
+                self.s.handle("save", {"step": num})                        # 6 · 7 · 8 은 이제 가르치지 않음
         self.ops.a.update({"2": -20.0})
-        self.s.handle("save", {"step": 9})
-        self.s.handle("save", {"step": 8})
-        self.s.handle("save", {"step": 6})                                  # 순서 상관없이
-        self.s.handle("save", {"step": 7})
+        self.assertIn("[새 회차로 저장]", self.s.handle("save", {"step": 9}))
+        self.ops.a.update({"1": 0.0, "2": 0.0})                             # 대기 자세에서 정차 사진
+        self.assertIn("상자 위치", self.s.handle("save", {"step": 3}))
         self.assertIn("✘ 실패", self.s.handle("take-save", {"sid": self.sid, "label": "손 회차", "success": False}))
         take = next(iter(self.book.get_set(self.sid)["takes"].values()))
         self.assertEqual((take["label"], take["use"]), ("손 회차", False))
         self.assertEqual(take["steps"]["above"]["angles"]["1"], 13.0)
+        self.assertEqual(take["steps"]["stop"]["basket"]["cx"], WIDTH / 2 + 12.0 * PX_PER_DEG)
         self.assertTrue(self.book.image_path(self.sid, take["steps"]["above"]["image"]))
+        self.assertTrue(self.book.image_path(self.sid, take["steps"]["stop"]["image"]))
         self.assertEqual(self.s.status["draft"], {})
         self.s.handle("save", {"step": 5})
         self.assertIn("비웠", self.s.handle("draft-clear", {}))
@@ -436,9 +482,17 @@ class SessionTest(unittest.TestCase):
             self.s.handle("cam-measure", {"sid": self.sid})                # ✔ 회차가 없으면 못 잰다
         self.assertFalse(self.s.state()["book"]["sets"][0]["cam"])
 
+    def test_stop_photo_needs_the_box(self):
+        self.eye.car = False                                               # 상자가 안 보임
+        with self.assertRaises(PlaceError):
+            self.s.handle("save", {"step": 3})
+        self.assertEqual(self.s.status["draft"], {})
+
     def test_start_rules(self):
         with self.assertRaises(PlaceError):
-            self.s.start("learn", self.sid, self.link, 7, "red")           # 빌려 올 성공 회차가 없음
+            self.s.start("learn", self.sid, self.link, 9, "red")           # 빌려 올 성공 회차가 없음
+        with self.assertRaises(PlaceError):
+            self.s.start("learn", self.sid, self.link, 7, "red")           # 7 은 프로그램이 하는 단계
         with self.assertRaises(PlaceError):
             self.s.start("learn", self.sid, self.link, 5, "auto")          # 5 이후는 색을 골라야
         with self.assertRaises(PlaceError):
@@ -446,30 +500,22 @@ class SessionTest(unittest.TestCase):
         with self.assertRaises(PlaceError):
             self.s.start("test", self.sid, self.link, 2, "auto")           # 테스트 2 는 학습 회차가 필요
 
-    def test_learn_from_step_7_borrows_5_and_6_from_the_latest_success(self):
+    def test_learn_from_step_9_borrows_5_from_the_latest_success(self):
         self.book.add_take(self.sid, steps(pan=3.0, cx=300.0), {}, success=True)
         self.book.add_take(self.sid, steps(pan=4.0, cx=310.0), {}, success=True)   # 가장 최근 성공
-        self.ops.a.update({"1": 12.0, "2": -20.0})                         # 지금 상태: 바구니 안에서 공을 쥔 채
-        self.s.start("learn", self.sid, self.link, 7, "red")
-        self.wait_for("teach7")
-        self.assertEqual(self.link.states(), ["IN_PROGRESS"])              # 차를 세워 둔 채 시작
-        self.s.handle("grip", {"delta": 40})
-        self.eye.loaded = True
-        self.s.handle("save", {"step": 7})
-        self.wait_for("teach8")
-        self.ops.a.update({"2": -2.0})                                      # 8 들어올리기
-        self.s.handle("save", {"step": 8})
+        self.ops.a.update({"1": 12.0, "2": 5.0})                           # 지금 상태: 공을 놓고 확인 자세
+        self.s.start("learn", self.sid, self.link, 9, "red")
         self.wait_for("teach9")
+        self.assertEqual(self.link.states(), ["IN_PROGRESS"])              # 차를 세워 둔 채 시작
+        self.eye.loaded = True
         self.s.handle("save", {"step": 9})
         self.wait_for("next")
         self.s.handle("next", {"verdict": "auto"})
         self.s._thread.join(5)
-        takes = list(self.book.get_set(self.sid)["takes"].values())
-        new = takes[-1]
-        self.assertEqual(new["steps"]["above"]["angles"]["1"], 4.0)         # 5 · 6 은 최근 성공 회차에서
-        self.assertEqual(new["steps"]["inside"]["angles"]["1"], 4.0)
-        self.assertEqual(new["steps"]["release"]["angles"]["1"], 12.0)      # 7 · 8 · 9 는 지금 가르친 값
-        self.assertEqual(new["steps"]["lift"]["angles"]["2"], -2.0)
+        new = list(self.book.get_set(self.sid)["takes"].values())[-1]
+        self.assertEqual(new["steps"]["above"]["angles"]["1"], 4.0)         # 5 는 최근 성공 회차에서
+        self.assertEqual(new["steps"]["check"]["angles"]["1"], 12.0)        # 9 는 지금 가르친 값
+        self.assertNotIn("stop", new["steps"])                              # 3 을 안 거쳤으니 정차 사진 없음
         self.assertEqual(self.ops.picked, [])                               # 공 집기는 건너뜀
         self.assertEqual(self.link.states()[-1], "SUCCESS")
 
@@ -491,7 +537,7 @@ class SessionTest(unittest.TestCase):
         self.s.start("test", self.sid, self.link, 5, "red", False)
         self.s._thread.join(5)
         results = [(r["step"], r["ok"]) for r in self.s.status["results"]]
-        self.assertEqual(results, [(5, True), (6, True), (7, True), (8, True), (9, True), (10, True)])
+        self.assertEqual(results, [(5, True), (6, True), (7, True), (9, True), (10, True)])
         self.assertEqual(self.ops.picked, [])                             # 5부터면 집기는 건너뜀
         self.assertEqual(self.link.states(), ["IN_PROGRESS", "SUCCESS"])
 
@@ -584,7 +630,7 @@ class YoloPlaceTest(unittest.TestCase):
         learned = self.book.learned(self.sid)
         self.assertTrue(self.runner.yolo_ready(learned))
         seen = []
-        ok, why = self.runner.auto_place(learned, on_step=lambda n, k, w: seen.append((n, k)))
+        ok, why = self.runner.legacy_place(learned, on_step=lambda n, k, w: seen.append((n, k)))
         self.assertTrue(ok, why)
         self.assertEqual(seen, [(5, True), (6, True), (7, True), (8, True), (9, True)])
         rx, ry, rz = self.eye.release_xy
@@ -619,7 +665,7 @@ class YoloPlaceTest(unittest.TestCase):
         place_flow.Reach.go = go
         self.addCleanup(setattr, place_flow.Reach, "go", original)
         seen = []
-        ok, why = self.runner.auto_place(learned, on_step=lambda n, k, w: seen.append((n, k, w)))
+        ok, why = self.runner.legacy_place(learned, on_step=lambda n, k, w: seen.append((n, k, w)))
         self.assertIn("여기서 넣어요", seen[0][2])                                 # 멈추지 않고 진행
         self.assertTrue(seen[1][1])
         self.assertIn("만 내려갔어요", seen[1][2])                                  # 6 도 가능한 만큼만
