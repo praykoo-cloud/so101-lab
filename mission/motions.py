@@ -289,15 +289,19 @@ def capture_point(robot) -> dict:
 
 
 def play(robot, points: list[dict], *, speed: int = 120, pan_offset: float = 0.0, stop=None, on_step=None,
-         too_hot=None, settle_timeout: float = 12.0, reach_tol: float = REACH_TOL_DEG, sleep=time.sleep) -> dict:
+         too_hot=None, settle_timeout: float = 12.0, reach_tol: float = REACH_TOL_DEG, sleep=time.sleep,
+         tolerance_deg: float | None = None, still_seconds: float | None = None, no_pause: bool = False) -> dict:
     """지점을 순서대로 간다. 토크가 켜져 있어야 한다 (꺼져 있으면 RobotError).
 
     pan_offset : 받침(1번 관절)에 더할 각도 (차가 기준 위치와 다른 곳에 섰을 때)
+    tolerance_deg · still_seconds : 도착 판정 (None = 드라이버 기본 0.5° · 0.5초). 크게 하면 다음 지점으로 일찍 넘어간다
+    no_pause   : True 면 지점마다 쉬는 시간 · 집게 뒤 0.3초를 건너뛴다 (멈칫 없음, 설정 arm_no_pause)
     stop       : threading.Event. set 되면 지금 지점까지만 가고 멈춘다
     too_hot    : 호출하면 True/False. True 면 멈춘다 (모터 과열)
     돌려주는 값: {"reached": 모든 지점 도달?, "stopped": 도중에 멈췄나, "errors": [지점별 오차(도)], "max_err", "done": 간 지점 수, "why"}
     """
     report = {"reached": True, "stopped": False, "errors": [], "max_err": None, "done": 0, "why": ""}
+    wait_kw = {k: v for k, v in (("tolerance_deg", tolerance_deg), ("still_seconds", still_seconds)) if v is not None}
     last_grip = robot.gripper_percent()
     for i, p in enumerate(points):
         if stop is not None and stop.is_set():
@@ -311,7 +315,7 @@ def play(robot, points: list[dict], *, speed: int = 120, pan_offset: float = 0.0
         target = {int(j): float(v) for j, v in p["angles"].items()}
         target[1] += pan_offset
         robot.move_all(target, speed=speed)
-        robot.wait_until_settled(timeout=settle_timeout)
+        robot.wait_until_settled(timeout=settle_timeout, **wait_kw)
         now = robot.angles()
         errs = [abs(now[j] - target[j]) for j in ARM_JOINTS if now.get(j) is not None]
         err = round(max(errs), 2) if len(errs) == len(ARM_JOINTS) else None
@@ -321,10 +325,12 @@ def play(robot, points: list[dict], *, speed: int = 120, pan_offset: float = 0.0
         grip = p.get("grip")
         if grip is not None and (last_grip is None or abs(grip - last_grip) > GRIP_CHANGE_PCT):
             robot.gripper(grip, speed=speed)
-            robot.wait_until_settled(timeout=4.0)
-            sleep(0.3)
+            robot.wait_until_settled(timeout=4.0, **wait_kw)
+            if not no_pause:
+                sleep(0.3)
             last_grip = grip
-        sleep(p.get("pause", DEFAULT_PAUSE))
+        if not no_pause:
+            sleep(p.get("pause", DEFAULT_PAUSE))
         report["done"] = i + 1
     known = [e for e in report["errors"] if e is not None]
     report["max_err"] = max(known) if known else None

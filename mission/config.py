@@ -73,6 +73,10 @@ class MissionConfig:
     # 속도 (서보 틱/초, 200 ≈ 17.6도/초)
     speed_slow: int = 120
     speed_normal: int = 200
+    # 팔 움직임 (2026-11-16): 상차 · 4번 테스트 · 동작 재생 · 대기 자세로 가기에 쓴다 (arm_io.run_speed / settle)
+    arm_fast: bool = True                    # 켜면 서보 최고 속도(ARM_MAX_SPEED) + arm_accel. 끄면 예전처럼 speed_slow · 가속 32
+    arm_accel: int = 254                     # arm_fast 일 때 가속도 (0~254, 클수록 빨리 최고 속도에 닿는다. 공이 흔들려 빠지면 줄이세요)
+    arm_no_pause: bool = True                # 켜면 동작 사이 멈칫 없앰: 목표 3° 안이면 바로 다음 동작, 지점마다 쉬기 · 집게 뒤 0.3초 없음
     # 시도
     attempts_max: int = 3
     # 그리퍼 % (0 닫힘 ~ 100 열림). 공을 쥐었을 때 값은 티칭 도구(m0_teach_poses 의 ballgrip)로 채운다
@@ -125,7 +129,7 @@ class MissionConfig:
     yolo_conf: float = 0.45                  # 확신 정도가 이보다 낮은 것은 버린다 (0~1)
     load_wait_pose: str = "watch"            # 대기 자세 이름: 차가 오는 쪽을 바라보는 고정 자세
     load_stop_lead_deg: float = 2.0          # 기준 받침 각도보다 이만큼 먼저 정지 신호를 낸다 (차가 미끄러지는 만큼)
-    load_stop_confirm_seconds: float = 1.5   # 정지 신호 뒤 차가 이만큼 연속으로 안 움직여야 '완전 정차' (1~2초)
+    load_stop_confirm_seconds: float = 0.5   # 정지 신호 뒤 차가 이만큼 연속으로 안 움직여야 '완전 정차' (2026-11-16: 1.5 → 0.5초)
     load_stop_timeout: float = 15.0          # 정지 신호 뒤 이 시간 안에 완전 정차가 안 되면 이번 차는 포기 (FAILED)
     load_pan_margin_deg: float = 15.0        # 추적할 때 받침이 '대기 자세 ~ 기준 각도' 밖으로 더 돌 수 있는 여유
     load_offset_max_deg: float = 25.0        # 차 위치 보정으로 받침을 더 돌리는 최대 각도 (넘으면 그 시도는 실패)
@@ -144,8 +148,12 @@ class MissionConfig:
     place_servo_max_deg: float = 15.0           # 학습 자세에서 관절마다 이만큼까지만 더 움직인다 (안전)
     place_servo_seconds: float = 8.0            # 이 시간 안에 못 맞추면 그 시도는 실패
     place_servo_tilt_sign: int = 0              # 세로 맞추기 (어깨 2번): 0 = 안 함, 1 / -1 = 방향 ('저장 자세' 방식에서만)
-    # 바구니 찾아가 넣기 (학습 없이, 기본): 바구니를 화면 가운데로 → 화면의 50% 가 될 때까지 다가감 → 집게 열기 → 위로 → 성공 확인
-    place_seek: bool = True                     # 켜면 학습한 5~9 를 쓰지 않고 YOLO 로 바구니를 찾아가 넣는다
+    place_model: bool = True                    # 켜면 정차 사진의 상자 위치로 5 자세를 계산해서 간다 (place_model.py). 못 쓰면 평균 자세
+    place_model_margin_px: float = 40.0         # 상자 위치가 학습한 범위에서 이 픽셀보다 더 벗어나면 계산하지 않고 평균 자세
+    save_stop_miss: bool = True                 # 켜면 완전 정차 순간 상자(바구니)를 못 찾았을 때 그 화면을 data/stop_miss/ 에 저장 (2026-11-17)
+    save_place_fail: bool = True                # 켜면 상자는 찾았는데 공 넣기에 실패했을 때 그 정차 화면을 data/place_fail/ 에 저장 (2026-11-17)
+    # 바구니 찾아가 넣기 (학습 없이, 2026-11-16 부터 기본으로 끔 → 4번에서 가르친 5 · 9 로 넣기): 바구니를 화면 가운데로 → 화면의 50% 가 될 때까지 다가감 → 집게 열기 → 위로 → 성공 확인
+    place_seek: bool = False                    # 켜면 학습한 5 · 9 를 쓰지 않고 YOLO 로 바구니를 찾아가 넣는다
     seek_area: float = 0.75                     # 바구니 네모가 화면의 이만큼(0~1)을 차지하면 '바구니 바로 위' 로 보고 집게를 연다
     seek_center_px: float = 30.0                # 바구니 가운데가 화면 가운데에서 이 픽셀 안이면 '가운데'
     seek_step_mm: float = 25.0                  # 가운데로 맞출 때 손끝을 한 번에 최대 이만큼(mm)

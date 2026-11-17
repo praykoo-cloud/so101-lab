@@ -27,8 +27,11 @@ SUCCESS · FAILED · WAITING 으로 바뀌면 False 를 3번(1초 간격) 보낸
 """
 from __future__ import annotations
 
+import json
+from datetime import datetime, timedelta, timezone
 import threading
 import time
+from pathlib import Path
 
 ARM_STATES = ["WAITING", "TRACKING", "STOP_REQUEST", "IN_PROGRESS", "SUCCESS", "FAILED"]      # 번호 = 순서 (0~5)
 CAR_STATES = ["IDLE", "DRIVING", "STOPPED", "AT_LOADING_ZONE", "PARKED"]                     # 번호 = 순서 (0~4)
@@ -37,6 +40,9 @@ PAUSE_TOPIC = "/arm/pause"
 HOLD_STATES = ("STOP_REQUEST", "IN_PROGRESS")      # 이 상태 동안은 차를 세워 둔다
 RELEASE_REPEAT = 3                                  # 출발(False) 을 몇 번 보낼지 (1초 간격)
 CAR_TOPIC = "/car/status"
+KST = timezone(timedelta(hours=9))
+TIMING_KEEP = 50                                    # 정차 → 출발 시간 기록을 몇 개까지 들고 있을지
+TIMING_FILE = Path(__file__).resolve().parent.parent / "data" / "stop_go_times.jsonl"   # 진짜 통신일 때만 한 줄씩 남김
 
 
 class LoadLink:
@@ -49,6 +55,11 @@ class LoadLink:
         self.car_seen_at: float | None = None
         self.hold = False                        # 지금 차를 세워 두는 중인가 (/arm/pause True)
         self._release_left = 0                   # 앞으로 False 를 몇 번 더 보낼지
+        # 정차 신호(STOP_REQUEST · IN_PROGRESS 시작) → 출발 신호(SUCCESS · FAILED) 시간 재기
+        self._stop_at: float | None = None       # 정차 신호를 보낸 순간 (monotonic)
+        self._stop_wall = ""                     # 그 순간의 시각 (화면 · 파일용)
+        self.timings: list[dict] = []            # 지난 기록 (오래된 것부터)
+        self.timing_file: Path | None = None     # 기록 파일 (RosLoadLink 만 씀)
 
     def set(self, state: str, color: str | None = None, attempt: int | None = None) -> None:
         if state not in ARM_STATES:
@@ -64,9 +75,45 @@ class LoadLink:
             self.hold = hold
             if changed and not hold:
                 self._release_left = RELEASE_REPEAT
+            record = self._time_mark(state, changed, hold)
+        if record is not None:
+            self._save_timing(record)
         self._publish_now()
         if changed or hold:
             self._pause_tick()
+
+    def _time_mark(self, state: str, changed: bool, hold: bool) -> dict | None:
+        """(잠금 안에서) 정차 신호가 시작되면 시계를 켜고, SUCCESS · FAILED 로 풀리면 걸린 시간을 기록한다"""
+        now = time.monotonic()
+        if changed and hold:
+            self._stop_at, self._stop_wall = now, datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")   # 컨테이너는 UTC 라 한국 시간으로
+            return None
+        if changed and not hold and self._stop_at is not None:
+            start, self._stop_at = self._stop_at, None
+            if state not in ("SUCCESS", "FAILED"):       # WAITING 등으로 풀림 = 중간에 취소 → 기록 안 함
+                return None
+            rec = {"start": self._stop_wall, "sec": round(now - start, 2), "result": state,
+                   "color": self.color, "attempt": self.attempt}
+            self.timings.append(rec)
+            del self.timings[:-TIMING_KEEP]
+            return rec
+        return None
+
+    def _save_timing(self, rec: dict) -> None:
+        if self.timing_file is None:
+            return
+        try:
+            self.timing_file.parent.mkdir(parents=True, exist_ok=True)
+            with self.timing_file.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+
+    def timing(self) -> dict:
+        """화면용: 지금 재는 중인 시간, 최근 기록 5개(새것부터), 평균 · 최소 · 최대"""
+        with self._lock:
+            running = None if self._stop_at is None else round(time.monotonic() - self._stop_at, 1)
+            return timing_summary(self.timings, running)
 
     def _pause_tick(self) -> None:
         """/arm/pause 를 한 번 보낼 차례면 보낸다: 세우는 중이면 True, 막 풀었으면 False (몇 번만)"""
@@ -101,6 +148,29 @@ class LoadLink:
         pass
 
 
+def timing_summary(records: list[dict], running: float | None = None) -> dict:
+    secs = [t["sec"] for t in records]
+    return {"running": running, "last": list(reversed(records[-5:])), "n": len(secs),
+            "avg": round(sum(secs) / len(secs), 2) if secs else None,
+            "min": min(secs) if secs else None, "max": max(secs) if secs else None}
+
+
+def load_timings(path: Path = TIMING_FILE) -> list[dict]:
+    """기록 파일의 최근 TIMING_KEEP 개 (파일이 없거나 깨진 줄은 건너뜀)"""
+    out = []
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines()[-TIMING_KEEP:]:
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(rec, dict) and isinstance(rec.get("sec"), (int, float)):
+                out.append(rec)
+    except OSError:
+        pass
+    return out
+
+
 class FakeLoadLink(LoadLink):
     """ROS2 없이: 보낸 상태를 history 에 쌓고, echo=True 면 화면에도 찍는다"""
 
@@ -132,6 +202,8 @@ class RosLoadLink(LoadLink):
 
     def __init__(self, hz: float = 1.0):
         super().__init__()
+        self.timing_file = TIMING_FILE
+        self.timings = load_timings(TIMING_FILE)     # 지난번 허브에서 잰 기록도 이어서 평균에 넣는다
         import rclpy
         from common_interfaces.msg import CarStatus, LoadingStatus
         from rclpy.node import Node
