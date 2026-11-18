@@ -260,10 +260,10 @@ class Robot:
         self._hold_here([sid for sid in JOINT_IDS if self.driver.get_torque(sid)])
         self._goals = {}
 
-    def wait_until_settled(self, tolerance_deg: float = 0.5, timeout: float = 5.0) -> bool:
+    def wait_until_settled(self, tolerance_deg: float = 0.5, timeout: float = 5.0, still_seconds: float = 0.5) -> bool:
         """마지막으로 보낸 목표에 모든 관절이 tolerance_deg 안으로 들어오면 True.
 
-        물체를 쥔 그리퍼처럼 목표까지 못 가는 관절은 0.5초 동안 멈춰 있으면 도착으로 본다.
+        물체를 쥔 그리퍼처럼 목표까지 못 가는 관절은 still_seconds(기본 0.5초) 동안 멈춰 있으면 도착으로 본다.
         (컨트롤러 앱 soarm.py 는 '두 번 읽은 값이 비슷하면 도착' 이라, 출발 직후 가속 중이거나
         느린 속도에서는 움직이는 중에 True 가 나왔다 — 실물에서 5° 명령이 0.7° 만 가고 끝남)
         """
@@ -277,7 +277,7 @@ class Robot:
             if prev is not None and all(pos.get(s) is not None and prev.get(s) is not None
                                         and abs(pos[s] - prev[s]) <= 2 for s in self._goals):
                 still_since = still_since or time.time()
-                if time.time() - still_since >= 0.5:
+                if time.time() - still_since >= still_seconds:
                     return True
             else:
                 still_since = None

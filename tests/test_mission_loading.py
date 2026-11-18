@@ -306,7 +306,8 @@ class LoadingTest(unittest.TestCase):
 
 
 class WorldOps:
-    """기본 방식 시험용 팔: 받침 각도는 FakeArm.pan 과 같다. 7(집게 해제) 때 바구니 위에 맞춰져 있으면 공이 들어간다"""
+    """기본 방식 시험용 팔: 받침 각도는 FakeArm.pan 과 같다. 6(집게 해제) 때 바구니 위에 맞춰져 있으면 공이 들어간다
+    (2026-11-16: 바구니 안으로 내려가지 않고 5 바구니 위에서 바로 놓는다)"""
 
     def __init__(self, world, arm, events):
         self.world, self.arm, self.events = world, arm, events
@@ -341,7 +342,7 @@ class WorldOps:
             self.arm.pan = deg
 
     def grip(self, pct):
-        if pct > 50 and self.a["2"] < -10:                      # 바구니 안에서 열었다
+        if pct > 50:                                            # 바구니 위에서 열었다
             miss = self.miss.pop(0) if self.miss else False
             if not miss and abs(self.arm.pan - self.world.car) <= 1.5 and self.world.stopped():
                 self.world.loaded = self.color
@@ -405,8 +406,23 @@ class NewFlowTest(unittest.TestCase):
         self.assertEqual(self.link.states(), ["WAITING", "STOP_REQUEST", "IN_PROGRESS", "SUCCESS", "WAITING"])
         self.assertNotIn("TRACKING", self.link.states())                      # 따라가지 않고 보이면 바로 정지
         self.assertEqual(self.world.loaded, "red")
-        self.assertEqual(self.arm.went[-1], "watch")                          # 대기 자세로 돌아간 뒤 출발 신호
+        self.assertEqual(self.arm.went[-1], "watch")                          # 출발 신호 뒤 대기 자세로
         self.assertEqual(self.link.pauses, [True, False])                     # 차 코드는 /arm/pause 로 선다 · 간다
+
+    def test_success_is_sent_before_going_back_to_the_wait_pose(self):
+        loader = self.build(note="red")
+        real_set = self.link.set
+        went_at = {}
+
+        def spy(state, *a, **k):
+            went_at.setdefault(state, list(self.arm.went))
+            return real_set(state, *a, **k)
+        self.link.set = spy
+        loader.run(max_jobs=1)
+        before = went_at["SUCCESS"]
+        self.assertEqual(before, went_at["IN_PROGRESS"])                     # 넣기 ~ 성공 신호 사이에 대기 자세로 안 감
+        self.assertGreater(len(self.arm.went), len(before))                  # 성공 신호 뒤에 대기 자세로
+        self.assertEqual(self.arm.went[-1], "watch")
 
     def test_error_away_from_wait_pose_keeps_the_car_stopped(self):
         loader = self.build(note="red")

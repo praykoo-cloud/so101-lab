@@ -617,7 +617,7 @@ class HubTest(unittest.TestCase):
                 self.moves.append(deg)
                 self.now[joint] = deg
 
-            def wait_until_settled(self, timeout=5.0):
+            def wait_until_settled(self, timeout=5.0, **kw):
                 return True
 
             def close(self):

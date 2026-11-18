@@ -12,7 +12,7 @@
   3) 차 + 상자가 연속 N장 함께 보이면 바로 정지 신호, 상자가 1.5초 안 움직이면 완전 정차  → STOP_REQUEST
   4) 포스트잇 색 → 그 색 공 집기 (3번 동작 티칭)                                       → IN_PROGRESS
   5~9) 바구니 위에 맞추기 → 안으로 → 집게 해제 → 들어올리기 → 성공 확인 (허브 4번 ★ 세트의 학습 값)
-  9) 성공: 대기 자세로 돌아간 뒤 SUCCESS (출발)
+  9) 성공: 9 확인 자세에서 바로 SUCCESS (출발) → 대기 자세. 실패: 대기 자세로 돌아간 뒤 FAILED
   10) 실패: 대기 자세에서 공을 받침대에 놓는 시간만큼 기다렸다가 4) 부터. 3번째도 실패면 FAILED (공 없이 출발)
 
 예전 방식 (설정 '예전 추적 방식' 을 켰을 때)
@@ -44,6 +44,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from .arm_io import apply_accel, play_options
 from .config import RUNTIME_DIR, MissionConfig
 from .m3_pick_place import band_ok
 from .motions import MotionBook, MotionError, play
@@ -173,6 +174,8 @@ class Loader:
                         ok, why = runner.seek_place(on_step=step_log)
                     else:
                         ok, why = runner.auto_place(learned, on_step=step_log)
+                    if not ok:                                       # 공을 옮겼는데 넣기 실패 → 정차 화면 저장 (차 한 대에 한 번)
+                        runner.save_place_fail(n, why, color)
                 self.log("attempt_result", n=n, ok=ok, why=why)
                 if ok:
                     result = "success"
@@ -190,13 +193,19 @@ class Loader:
             self.log("ERROR", reason=str(e))
             raise
         finally:
+            sent = False
+            if result == "success":                                  # 성공: 확인 자세에서 바로 출발 신호 → 그다음 대기 자세 (2026-11-16)
+                self.link.set("SUCCESS")
+                sent = True
             home = False
             try:
-                home = bool(self.go_wait())                          # 9) 대기 자세로 돌아간 뒤 (오류여도 한 번 시도)
+                home = bool(self.go_wait())                          # 9) 대기 자세로 (오류여도 한 번 시도)
             except Exception as e:
                 self.log("warn", msg=f"대기 자세로 가지 못했어요: {e}")
-            if home or not self.link.hold:
-                self.link.set("SUCCESS" if result == "success" else "FAILED")   # 결과를 알려 차를 출발시킨다
+            if sent:
+                pass
+            elif home or not self.link.hold:
+                self.link.set("FAILED")                              # 실패: 대기 자세로 돌아간 뒤 알려 차를 출발시킨다
             else:
                 # 집게가 바구니 안에 있을 수 있다 → 차를 세워 둔 채로 둔다 (사람이 팔을 치우고 차 패널로 출발)
                 self.log("hold_car", msg="팔이 대기 자세로 못 돌아가서 차를 세워 둡니다. 팔을 치운 뒤 차를 직접 출발시키세요.")
@@ -205,8 +214,9 @@ class Loader:
     # ── 팔 (시험에서는 이 세 개만 바꿔 끼운다) ──────────────────────────
     def play_motion(self, name: str, pan_offset: float = 0.0) -> dict:
         _tid, take = self.book.chosen(name)
-        return play(self.arm.robot, take["points"], speed=self.cfg.speed_slow, pan_offset=pan_offset,
-                    stop=_Leaving(self), too_hot=self.arm.too_hot, sleep=self.sleep)
+        apply_accel(self.arm.robot, self.cfg)
+        return play(self.arm.robot, take["points"], pan_offset=pan_offset,
+                    stop=_Leaving(self), too_hot=self.arm.too_hot, sleep=self.sleep, **play_options(self.cfg))
 
     def turn_to(self, pan: float) -> None:
         self.arm.robot.move(1, pan, speed=self.cfg.speed_slow)

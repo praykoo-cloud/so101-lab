@@ -18,6 +18,42 @@ from soarm.driver_sdk import JOINT_IDS
 
 from .config import MissionConfig
 
+ARM_MAX_SPEED = 3400                # STS3215 서보 최고 속도 (틱/초, 12V 에서 약 0.22초/60°). arm_fast 일 때 쓴다
+DEFAULT_ACCEL = 32                  # 기본 드라이버(soarm) 가 연결할 때 쓰는 가속도
+NO_PAUSE_TOL_DEG = 3.0              # arm_no_pause: 목표에서 이만큼 안에 들어오면 '도착' → 바로 다음 동작
+NO_PAUSE_STILL_S = 0.15             # arm_no_pause: 쥔 공처럼 목표까지 못 가는 관절은 이만큼 멈춰 있으면 '도착' (기본 0.5초)
+
+
+def run_speed(cfg: MissionConfig) -> int:
+    """동작 속도: arm_fast 면 서보 최고 속도, 아니면 speed_slow"""
+    return ARM_MAX_SPEED if cfg.arm_fast else cfg.speed_slow
+
+
+def apply_accel(robot, cfg: MissionConfig) -> None:
+    """설정에 맞는 가속도를 서보에 쓴다 (바뀔 때만). 가짜 팔(driver 없음)은 건너뛴다"""
+    want = max(0, min(254, int(cfg.arm_accel))) if cfg.arm_fast else DEFAULT_ACCEL
+    driver = getattr(robot, "driver", None)
+    if driver is None or not hasattr(driver, "set_acceleration") or getattr(robot, "_mission_accel", None) == want:
+        return
+    for sid in JOINT_IDS:
+        driver.set_acceleration(sid, want)
+    robot._mission_accel = want
+
+
+def settle(robot, cfg: MissionConfig, timeout: float) -> bool:
+    """움직임이 끝날 때까지 기다린다. arm_no_pause 면 3° 안에 들어오면 바로 (멈칫 없음)"""
+    if cfg.arm_no_pause:
+        return robot.wait_until_settled(timeout=timeout, tolerance_deg=NO_PAUSE_TOL_DEG, still_seconds=NO_PAUSE_STILL_S)
+    return robot.wait_until_settled(timeout=timeout)
+
+
+def play_options(cfg: MissionConfig) -> dict:
+    """motions.play 에 넘길 속도 · 멈칫 설정"""
+    if cfg.arm_no_pause:
+        return {"speed": run_speed(cfg), "tolerance_deg": NO_PAUSE_TOL_DEG, "still_seconds": NO_PAUSE_STILL_S,
+                "no_pause": True}
+    return {"speed": run_speed(cfg)}
+
 
 class ArmIO:
     def __init__(self, robot: Robot, cfg: MissionConfig):
@@ -71,15 +107,17 @@ class ArmIO:
     # ── 움직이기 ────────────────────────────────────────────────────────
     def go(self, pose: str, speed: int | None = None, wait: bool = True, timeout: float = 12.0) -> bool:
         """티칭한 자세로 간다 (그리퍼는 그대로). 도착하면 True"""
-        self.robot.speed = self.cfg.speed_slow if speed is None else speed
+        apply_accel(self.robot, self.cfg)
+        self.robot.speed = run_speed(self.cfg) if speed is None else speed
         self.robot.go_pose(pose, speed=self.robot.speed, wait=False)
-        return self.robot.wait_until_settled(timeout=timeout) if wait else True
+        return settle(self.robot, self.cfg, timeout) if wait else True
 
     def grip(self, pct: float, wait: bool = True) -> None:
-        self.robot.gripper(pct, speed=self.cfg.speed_slow)
+        self.robot.gripper(pct, speed=run_speed(self.cfg))
         if wait:
-            self.robot.wait_until_settled(timeout=4.0)
-            time.sleep(0.3)
+            settle(self.robot, self.cfg, 4.0)
+            if not self.cfg.arm_no_pause:
+                time.sleep(0.3)
 
     def grip_pct(self) -> float | None:
         return self.robot.gripper_percent()

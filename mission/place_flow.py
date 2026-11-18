@@ -3,16 +3,21 @@
 단계 번호 (허브 4번 화면과 같다)
   2 대기 자세로 가서 차를 기다림
   3 차와 상자가 함께 보이면 정지 신호 → 완전 정차 확인
+    (완전 정차 순간 상자를 못 찾으면 그 화면을 data/stop_miss/ 에 저장 = 설정 save_stop_miss. YOLO 다시 학습할 사진)
+    (상자를 찾았으면 그 화면을 기억해 두었다가, 공을 집은 뒤 넣기에 실패하면 data/place_fail/ 에 저장 = 설정 save_place_fail)
   4 포스트잇 색 읽기 → 그 색 공 집기 (3번 동작 티칭의 빨간공_집기 / 파란공_집기)
-  5 바구니 위 (학습한 자세로 간 뒤, 바구니가 학습 때와 같은 자리에 보이도록 조금씩 맞춤 = 실시간 맞추기)
-  6 바구니 안 (5 에서 맞춘 만큼 더해서)
-  7 집게 해제 (학습한 % 만큼 열기)
-  8 들어올리기 (집게를 연 채로)
+  5 바구니 위 (기본: 3 완전 정차 순간 상자 위치로 계산한 자세 = place_model.py 2차식.
+               못 쓰면 학습 평균 자세로 간 뒤, 바구니가 학습 때와 같은 자리에 보이도록 조금씩 맞춤 = 실시간 맞추기)
+  6 집게 해제 (늘 RELEASE_PCT = 60% 로 연다)
+  7 바구니 위 (5 에서 맞춘 자세로 다시)
   9 성공 확인 자세 → '공이 든 상자' 가 보이면 성공
-  10 성공: 대기 자세 → 출발 신호(SUCCESS)      11 실패: 4 부터 다시 (3번째 실패면 FAILED)
+  10 성공: 출발 신호(SUCCESS) → 대기 자세      11 실패: 4 부터 다시 (3번째 실패면 FAILED)
+  (2026-11-16 바뀜: 6 바구니 안 · 8 들어올리기를 빼고 바구니 위에서 바로 놓는다. auto_place 가 이 순서.
+   예전 순서는 legacy_place 에 남겨 둔다)
 
 넣기 방식 (설정)
-  바구니 찾아가기 (place_seek, 기본, 학습 필요 없음): seek_place()
+  기본 (place_seek 끔): 위 5 → 6 → 7 → 9 (auto_place)
+  바구니 찾아가기 (place_seek, 2026-11-16 부터 기본으로 끔, 학습 필요 없음): seek_place()
     시작 = 대기 자세(차 · 바구니가 보이는 자세). 시작할 때 손끝을 앞뒤 · 좌우로 조금 움직여 카메라 방향을 스스로 잰다.
     5 바구니를 화면 가운데로 → 6 가운데를 지키며 아래로 다가가 바구니가 화면의 50% 이상 → 7 공을 쥐고 있는지 보고 집게 열기
     → 8 5 cm 위로 → 9 집게가 열려 있고 '공이 든 바구니' 가 보이면 성공.
@@ -33,19 +38,31 @@
 """
 from __future__ import annotations
 
+import json
 import math
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
+from .arm_io import apply_accel, play_options, run_speed, settle
 from .m3_pick_place import band_ok
 from .motions import MotionError, play
+from .place_learn import RELEASE_PCT
+from .place_model import predict as predict_above
 from .place_reach import Reach, ReachError, lean_of, tip_of, urdf_from_angles
 from .yolo import BASKET_NAMES, pick_best
 
 PICK_MOTION = {"red": "빨간공_집기", "blue": "파란공_집기"}
 COLOR_MIN_HITS = 3
 JOINTS = ("1", "2", "3", "4", "5")
+STOP_MISS_DIR = Path(__file__).resolve().parent.parent / "data" / "stop_miss"   # 정차했는데 상자를 못 찾은 화면
+PLACE_FAIL_DIR = Path(__file__).resolve().parent.parent / "data" / "place_fail" # 상자는 찾았는데 공 넣기에 실패한 회차의 정차 화면
+
+
+def _stem() -> str:
+    """저장 파일 이름: 날짜_시각_밀리초"""
+    return time.strftime("%Y%m%d_%H%M%S") + f"_{int(time.time() * 1000) % 1000:03d}"
 
 
 class FlowStopped(RuntimeError):
@@ -96,6 +113,32 @@ class YoloEye:
             self._jpeg = buf.tobytes() if ok else None
         return self._jpeg
 
+    def snapshot(self):
+        """마지막 사진 + 찾은 것을 따로 떼어 둔다 (나중에 저장할 때). 사진이 없으면 None"""
+        if self.last_frame is None:
+            return None
+        return self.last_frame.copy(), list(self.last_dets)
+
+    def save_shot(self, shot, folder, stem: str) -> list:
+        """snapshot() 을 저장한다: <stem>.jpg = 원본 (YOLO 다시 학습할 때 라벨 붙일 사진), <stem>_yolo.jpg = 찾은 것을 그린 사진.
+        저장한 파일 목록"""
+        if shot is None:
+            return []
+        import cv2
+        from .yolo import draw
+        frame, dets = shot
+        folder = Path(folder)
+        folder.mkdir(parents=True, exist_ok=True)
+        out = []
+        for path, img in ((folder / f"{stem}.jpg", frame), (folder / f"{stem}_yolo.jpg", draw(frame, dets))):
+            if cv2.imwrite(str(path), img):
+                out.append(path)
+        return out
+
+    def save_last(self, folder, stem: str) -> list:
+        """마지막 사진을 바로 저장한다 (save_shot 참고). 사진이 없으면 빈 목록"""
+        return self.save_shot(self.snapshot(), folder, stem)
+
     def basket(self) -> dict | None:
         """마지막 사진에서 가장 확실한 바구니(상자) 하나"""
         box = pick_best(self.last_dets, BASKET_NAMES)
@@ -127,8 +170,9 @@ class ArmOps:
         return self.robot.gripper_percent()
 
     def move_to(self, angles: dict, timeout: float = 12.0, speed: int | None = None) -> bool:
-        self.robot.move_all({int(j): float(v) for j, v in angles.items()}, speed=speed or self.cfg.speed_slow)
-        return self.robot.wait_until_settled(timeout=timeout)
+        apply_accel(self.robot, self.cfg)
+        self.robot.move_all({int(j): float(v) for j, v in angles.items()}, speed=speed or run_speed(self.cfg))
+        return settle(self.robot, self.cfg, timeout)
 
     def nudge(self, joint: str, deg: float) -> None:
         self.robot.move(int(joint), deg, speed=self.cfg.speed_slow)
@@ -148,7 +192,8 @@ class ArmOps:
     def play_pick(self, color: str, book, stop) -> dict:
         _tid, take = book.chosen(PICK_MOTION[color])
         self.robot.torque(True)
-        return play(self.robot, take["points"], speed=self.cfg.speed_slow, stop=stop, too_hot=self.arm.too_hot)
+        apply_accel(self.robot, self.cfg)
+        return play(self.robot, take["points"], stop=stop, too_hot=self.arm.too_hot, **play_options(self.cfg))
 
 
 class PlaceRunner:
@@ -160,6 +205,13 @@ class PlaceRunner:
         self._log = log or (lambda event, **kw: print(f"[{time.strftime('%H:%M:%S')}] {event} {kw if kw else ''}", flush=True))
         self.stop_event = stop or threading.Event()
         self.max_wait: float | None = None           # 시험용: 차를 기다리는 최대 시간 (None = 계속)
+        self.stop_box: dict | None = None            # 완전 정차 순간 YOLO 상자 (cx, cy, w, h) → 5 자세 계산에 쓴다
+        self.miss_dir = STOP_MISS_DIR                # 완전 정차인데 상자를 못 찾았을 때 화면을 저장할 곳 (시험에서 바꾼다)
+        self.miss_saved: list = []                   # 이번 사이클에 저장한 파일 (화면에 알려 줄 때)
+        self.fail_dir = PLACE_FAIL_DIR               # 공 넣기 실패 때 정차 화면을 저장할 곳 (시험에서 바꾼다)
+        self.stop_shot = None                        # 완전 정차 순간 화면 (상자를 찾았을 때만). 넣기 실패 때 저장
+        self.fail_saved: list = []                   # 이번 사이클에 넣기 실패로 저장한 파일 (한 사이클에 한 번만 저장)
+        self.fail_tried = False                      # 이번 사이클에 저장을 이미 해 봤는지
 
     def log(self, event, **kw):
         self._log(event, **kw)
@@ -186,6 +238,11 @@ class PlaceRunner:
         t0 = self.clock()
         streak = 0
         stop_at = anchor = still_since = None
+        self.stop_box = None
+        self.miss_saved = []
+        self.stop_shot = None
+        self.fail_saved = []
+        self.fail_tried = False
         while True:
             self.check()
             now = self.clock()
@@ -210,10 +267,83 @@ class PlaceRunner:
                 elif anchor is None or math.hypot(target.cx - anchor[0], target.cy - anchor[1]) > cfg.track_stop_px:
                     anchor, still_since = (target.cx, target.cy), now
                 elif now - still_since >= cfg.load_stop_confirm_seconds:
-                    self.log("car_stopped", x=round(target.cx), y=round(target.cy))
+                    if box is not None:
+                        self.stop_box = {"cx": round(box.cx, 1), "cy": round(box.cy, 1),
+                                         "w": round(box.w, 1), "h": round(box.h, 1)}
+                        if self.cfg.save_place_fail and hasattr(self.eye, "snapshot"):
+                            self.stop_shot = self.eye.snapshot()     # 넣기에 실패하면 이 화면을 저장한다
+                    self.log("car_stopped", x=round(target.cx), y=round(target.cy), box=self.stop_box)
+                    if box is None:
+                        self._save_stop_miss(seen)
                     return True
             # 차를 기다리는 동안은 짧게 쉬어 빨리 알아챈다. 정지 신호 뒤(정차 확인)는 원래 주기
             self.sleep(cfg.load_see_period if stop_at is None else cfg.track_period)
+
+    def _save_stop_miss(self, seen) -> None:
+        """완전 정차인데 상자를 못 찾은 화면을 저장한다. 저장이 안 돼도 상차는 계속한다"""
+        if not self.cfg.save_stop_miss:
+            return
+        save = getattr(self.eye, "save_last", None)
+        if save is None:
+            return
+        try:
+            self.miss_saved = [str(p) for p in save(self.miss_dir, _stem())]
+        except Exception as e:                      # 디스크가 꽉 찼거나 폴더 권한 문제여도 상차는 멈추지 않는다
+            self.log("stop_miss_save_failed", error=str(e))
+            return
+        names = [d.name for d in (seen.dets if seen else [])]
+        self.log("stop_miss_saved", files=self.miss_saved, seen=names,
+                 msg="완전 정차했는데 상자를 못 찾아서 그 화면을 저장했어요")
+
+    def save_place_fail(self, attempt: int, why: str, color: str | None = None) -> list:
+        """공을 집은 뒤 넣기에 실패했을 때: 완전 정차 순간 화면(상자를 찾았던 사진) + 그때 정보(.json)를 저장한다.
+        한 사이클(차 한 대)에 한 번만 저장한다 (같은 정차 화면이므로). 저장한 파일 목록. 실패해도 상차는 계속한다"""
+        if not self.cfg.save_place_fail or self.stop_shot is None or self.fail_tried:
+            return []
+        self.fail_tried = True                       # 저장이 안 돼도 이 차에서는 다시 하지 않는다
+        save = getattr(self.eye, "save_shot", None)
+        if save is None:
+            return []
+        stem = _stem()
+        try:
+            files = [str(p) for p in save(self.stop_shot, self.fail_dir, stem)]
+            info = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "attempt": attempt, "why": why, "color": color,
+                    "stop_box": self.stop_box, "place_model": bool(self.cfg.place_model)}
+            meta = Path(self.fail_dir) / f"{stem}.json"
+            meta.write_text(json.dumps(info, ensure_ascii=False, indent=1), encoding="utf-8")
+            files.append(str(meta))
+        except Exception as e:
+            self.log("place_fail_save_failed", error=str(e))
+            return []
+        self.fail_saved = files
+        self.log("place_fail_saved", files=files, attempt=attempt, why=why,
+                 msg="공 넣기에 실패해서 이번 정차 화면을 저장했어요")
+        return files
+
+    # ── 실전 반복: 다음 차를 받기 전에 지금 차가 떠나기를 기다린다 ──────
+    def wait_car_gone(self) -> bool:
+        """결과(출발 신호)를 알린 뒤: 차가 서 있다가 '주행 중'(DRIVING)을 알리거나, 차 · 바구니가 t_left 초 동안
+        안 보이면 떠난 것 (True). load_leave_timeout 초 안에 확인하지 못하면 False (그래도 다음 차를 기다린다).
+        기다리는 동안에도 정지 버튼을 본다. mission.loading 의 wait_car_gone 과 같은 기준"""
+        cfg = self.cfg
+        was = getattr(self.link, "car_state", None)  # 결과를 알릴 때 차 상태. 서 있던 차가 DRIVING 이 되면 떠난 것
+        t0 = self.clock()
+        gone_since = None
+        while self.clock() - t0 < cfg.load_leave_timeout:
+            self.check()
+            now = getattr(self.link, "car_state", None)
+            if now == "DRIVING" and was not in (None, "DRIVING"):
+                return True
+            seen = self.eye.look()
+            if seen and pick_best(seen.dets, BASKET_NAMES + ("car",)) is not None:
+                gone_since = None
+            else:
+                gone_since = gone_since if gone_since is not None else self.clock()
+                if self.clock() - gone_since >= cfg.t_left:
+                    return True
+            self.sleep(0.2)
+        self.log("warn", msg="차가 떠나는 것을 확인하지 못했지만 다음 차를 기다립니다")
+        return False
 
     # ── 4) 색 · 공 집기 ─────────────────────────────────────────────────
     def read_color(self) -> str | None:
@@ -251,16 +381,28 @@ class PlaceRunner:
                 return False, f"집게가 공 크기에서 멈추지 않았어요 ({pct}%). 공을 못 잡은 것 같아요"
         return True, "공을 집었어요"
 
-    # ── 5) 바구니 위: 학습 자세로 간 뒤 실시간 맞추기 ──────────────────
+    # ── 5) 바구니 위: 정차 사진으로 계산한 자세 (못 쓰면 학습 평균 자세 + 실시간 맞추기) ──
     def step_above(self, learned: dict) -> tuple[dict | None, str]:
-        """성공하면 (보정 각도, 설명). 실패하면 (None, 이유)"""
+        """성공하면 (보정 각도, 설명). 실패하면 (None, 이유).
+        보정 각도 = 실제로 간 자세 - 학습 평균 자세 (7 바구니 위 · 9 받침에 그대로 쓴다)"""
         cfg = self.cfg
         base = learned["poses"]["above"]
         self.check()
+        fallback = ""
+        if cfg.place_model:
+            pose, why = predict_above(learned.get("model"), self.stop_box, margin_px=cfg.place_model_margin_px)
+            if pose is not None:
+                goal = {j: pose.get(j, base[j]) for j in JOINTS}
+                ok = self.ops.move_to(goal)
+                corr = self._correction(base)
+                self.log("above_model", box=self.stop_box, goal=goal, corr=corr)
+                return corr, f"{why}로 갔어요" + ("" if ok else " (목표에 다 못 갔어요: 걸렸을 수 있어요)")
+            fallback = f"{why} → 평균 자세로. "
+            self.log("above_model_skip", why=why)
         self.ops.move_to(base)
         target = learned.get("target")
         if target is None:
-            return self._correction(base), "학습한 바구니 위치가 없어 맞추기 없이 학습 자세 그대로 갔어요"
+            return self._correction(base), fallback + "학습한 바구니 위치가 없어 맞추기 없이 학습 자세 그대로 갔어요"
         t0 = self.clock()
         pan_sign = 1 if cfg.track_pan_sign >= 0 else -1
         tilt_sign = int(cfg.place_servo_tilt_sign)
@@ -284,7 +426,7 @@ class PlaceRunner:
             if x_ok and y_ok:
                 corr = self._correction(base)
                 self.log("above_ok", ex=round(ex), ey=round(ey), corr=corr)
-                return corr, f"바구니 위로 맞췄어요 (가로 {ex:+.0f}, 세로 {ey:+.0f} 픽셀 차이)"
+                return corr, fallback + f"바구니 위로 맞췄어요 (가로 {ex:+.0f}, 세로 {ey:+.0f} 픽셀 차이)"
             now = self.ops.angles()
             moves = []
             if not x_ok:
@@ -340,6 +482,29 @@ class PlaceRunner:
             return False, "집게가 아직 공을 쥐고 있어요 (놓지 못함 → 실패)"
         ok = self.basket_has_ball()
         return ok, "공이 든 바구니가 보여요 (성공)" if ok else "공이 든 바구니가 안 보여요 (실패)"
+
+    # ── 6 · 7 · 9 (2026-11-16 순서): 바구니 위에서 바로 놓기 ─────────────
+    def release_fixed(self) -> tuple[bool, str]:
+        """6) 그 자리에서 집게를 RELEASE_PCT(60%) 로 연다 (열기 전에 공을 쥐고 있는지 확인)"""
+        self.check()
+        ok, held = self.holding()
+        if not ok:
+            return False, held
+        self.ops.grip(RELEASE_PCT)
+        self.pause(self.cfg.seek_drop_seconds)                   # 공이 떨어질 시간
+        return True, f"집게를 {RELEASE_PCT:g}% 로 열었어요"
+
+    def back_above(self, learned: dict, corr: dict) -> tuple[bool, str]:
+        """7) 5 에서 맞춘 바구니 위 자세로 다시 (집게는 연 채로)"""
+        self.check()
+        goal = {j: learned["poses"]["above"][j] + corr.get(j, 0.0) for j in JOINTS}
+        ok = self.ops.move_to(goal)
+        return True, "바구니 위 자세로 돌아왔어요" + ("" if ok else " (목표에 다 못 갔어요: 걸렸을 수 있어요)")
+
+    def place_steps(self, learned: dict, corr: dict):
+        """6 · 7 · 9 (번호, 실행 함수) — 5 다음 순서"""
+        return ((6, self.release_fixed), (7, lambda: self.back_above(learned, corr)),
+                (9, lambda: self.step_check(learned, corr)))
 
     def basket_has_ball(self) -> bool:
         hits = 0
@@ -810,7 +975,22 @@ class PlaceRunner:
         return ok, why
 
     def auto_place(self, learned: dict, on_step=None) -> tuple[bool, str]:
-        """5 → 6 → 7 → 8 → 9 자동. on_step(번호, 성공?, 설명) 을 단계마다 부른다"""
+        """5 바구니 위 → 6 집게 해제(60%) → 7 바구니 위 → 9 성공 확인. on_step(번호, 성공?, 설명) 을 단계마다 부른다"""
+        corr, why = self.step_above(learned)
+        if on_step:
+            on_step(5, corr is not None, why)
+        if corr is None:
+            return False, why
+        for num, fn in self.place_steps(learned, corr):
+            ok, why = fn()
+            if on_step:
+                on_step(num, ok, why)
+            if not ok:
+                return False, why
+        return True, why
+
+    def legacy_place(self, learned: dict, on_step=None) -> tuple[bool, str]:
+        """(예전, 2026-11-16 전) 5 → 6 바구니 안 → 7 집게 해제 → 8 들어올리기 → 9. 예전 회차(6 · 7 · 8 값)가 있어야 한다"""
         if self.yolo_ready(learned):
             state, why = self.yolo_above(learned)
             steps = None if state is None else self.yolo_steps(learned, state)
